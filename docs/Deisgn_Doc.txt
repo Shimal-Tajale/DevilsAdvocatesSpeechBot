@@ -1,0 +1,474 @@
+Speech Coach Bot — Design Doc
+Oct 23, 2026 · @Lost
+MVP: build this first
+If these four steps work end to end, we have a demoable product. Everything else in this doc is an extra, started only once the MVP works (target: hour 12).
+Upload a speech → Deepgram transcript → our metrics: pace, filler words, pauses. (Shimal)
+Gemini returns the feedback JSON → the app shows a scorecard. (Shimal, Abhiram)
+The robot reacts to state events with its LED, LCD and buzzer. (Abhijay)
+One live alert: posture, from a phone webcam or a replay video. (Kundansai)
+Not in the MVP: extra coaching modes, raise hand, database history, eye contact, Muse, SerpApi, the presence and sound sensors.
+Overview
+We're building an AI speech coach with a physical robot body. It watches and listens while you present, reacts live (LEDs, head movements, an LCD, a beep), and coaches you with spoken and on-screen feedback afterward.
+One-line pitch: a robot practice audience that helps you show up for the people you care about (a wedding toast, a class talk, a eulogy, a first conversation) by reacting while you speak and coaching you with measurable feedback.
+Event: HackTX 26 (Freetail Hackers), Oct 24–25, 2026. Tracks are announced; see Target tracks below.
+Goals
+A working end-to-end demo: someone speaks, the robot reacts live, then the bot gives specific, scored feedback.
+Feedback built from real measurements (pace, filler words, pauses, posture, eye contact), not generic AI praise.
+Every teammate owns a visible piece of the final product.
+Non-goals
+Streaming everything perfectly in real time. Post-speech analysis is the baseline, and live alerts are layered on top.
+User accounts, auth or polish beyond what the demo shows.
+A complex robot. A head, lights, a screen and a buzzer are enough.
+Target tracks
+Meta and Hardware are the core. Gemini is a small add-on, and SerpApi happens only if the MVP works by hour 12. Each sponsor tool must play a real role, not just be called somewhere.
+Priority
+Track
+Prize
+How we fit
+Tools used
+1
+Meta: Bringing People Closer Together with AI
+Invite to Round 2 hackathon at Menlo Park + swag
+Practice audience that helps you connect with a real one
+Muse Spark (feedback), Muse Voice Transcribe (if it keeps fillers), Muse connector (stretch)
+1
+Hardware
+(see event page)
+The robot itself
+Arduino Mega kit, MLH parts
+2
+Best Use of Gemini API
+MLH + DEV swag
+Multimodal review of uploaded practice videos
+Gemini Flash
+3
+Best Use of SerpApi
+Switch 2 / AirPods Pro 3 / monitors
+Debate mode: robot raises its hand with a sourced counter-claim
+SerpApi search
+(all)
+Best Overall, Best Pitch
+(see event page)
+The full demo, Shimal pitching
+(none)
+
+
+Fit with Meta's values: "Build awesome things" (a robot that reacts live) and "Move fast" (working MVP by hour 12).
+Team and ownership
+Each person owns one layer and builds against the event contract, so nobody waits on anyone else. Shimal leads and owns integration.
+Person
+Owns
+Delivers
+Backup role
+Shimal (lead)
+Core pipeline, event hub, robot bridge, integration, pitch
+FastAPI server, /speech pipeline, WebSocket broadcast, bridge.py, demo script
+Unblocks whoever is stuck
+Kundansai
+Backend services, data, computer vision
+API routes, Postgres sessions and history, MediaPipe posture/gaze module, deployment
+Helps on frontend
+Abhiram
+Frontend, coaching rubric
+Ionic app (record, live view, scorecard), feedback rubric and prompts from TEDx coaching experience, demo speaker
+Hardware backup with Abhijay
+Abhijay
+Robot hardware
+Arduino Mega robot: servo head, RGB LED, LCD, buzzer, presence sensor, serial protocol handler
+If hardware is cut: on-screen avatar, integration testing, Devpost write-up
+
+Working rules
+Shimal and Kundansai share one FastAPI app but separate files. Shimal's pipeline exposes run_session(audio), and Kundansai's routes call it.
+Check-ins every 3–4 hours: what works, what's blocked, what to cut.
+Shimal makes the final call on scope cuts, after hearing the owner.
+Git
+One repo with folders backend/, frontend/, bridge/, robot/ and docs/. Each person works mainly in their own folder.
+Short-lived branches (shimal/pipeline, abhiram/frontend). Merge into main every 1–2 hours, whenever something works. No PR reviews.
+Pull from main before merging, test that it runs, then push. main must always run. If it breaks, fix or revert right away.
+.env stays out of Git. Commit only .env.example with key names.
+System architecture
+
+system architecture · 6 parts, one hub
+No part talks to another directly. Everything goes through the hub, so the robot, the database or any API can be swapped or dropped without breaking the rest.
+Data flow for one speech
+The robot's PIR sensor sends P:1 → bridge → hub broadcasts user_present → the frontend opens the session.
+During the speech, the browser runs vision and volume checks and sends alert events to the hub, which relays them to the robot.
+At the end, the browser POSTs the recording to /speech. The hub calls Deepgram, computes metrics, calls the AI model and TTS, saves to Postgres and broadcasts the results.
+The frontend shows the scorecard. The robot lights up, shows the score and speaks its tip.
+Backend
+One FastAPI app is the hub. It runs the speech pipeline, keeps session state and relays every event to everything connected.
+Endpoints
+Endpoint
+Owner
+Purpose
+POST /speech
+Shimal
+Upload a finished recording. Runs the full pipeline and returns transcript, metrics and feedback.
+WS /events
+Shimal
+Two-way event bus. Clients receive broadcasts and send alerts and user_present.
+POST /sessions
+Kundansai
+Start a session (mode, speaker name, topic). Returns session_id.
+GET /sessions/{id}
+Kundansai
+Full results for one session, for the scorecard page.
+GET /history/{speaker}
+Kundansai
+Past sessions, to show improvement over time.
+WS /stream (stretch)
+Shimal
+Live audio to Deepgram streaming, for live pace alerts.
+
+Pipeline (run_session)
+Broadcast state: thinking.
+Transcribe with Deepgram (pre-recorded, filler words on, word timestamps).
+Compute metrics in our own Python: words per minute, filler count and list, pauses over 2 s, longest pause, speaking time.
+Merge vision stats reported by the browser during the speech (posture alerts, eye-contact %, gesture level).
+Get feedback from the AI model using Abhiram's rubric. It must return JSON (schema below).
+Broadcast feedback, then lcd with the score, then state: speaking.
+Speak the robot_line with text-to-speech (browser speechSynthesis as fallback).
+Save everything to Postgres, then broadcast state: idle.
+Feedback JSON (AI model output)
+{
+  "scores": {"structure": 7, "clarity": 8, "delivery": 6, "persuasion": 7, "confidence": 6},
+  "overall": 68,
+  "strengths": ["Strong opening hook"],
+  "fixes": ["Cut 'um' before key points", "Pause after your main claim"],
+  "robot_line": "Great hook! Next time, slow down in the middle."
+}
+AI provider switch: start on Gemini and move to Muse Spark for the Meta track. All provider code lives in get_feedback(), so switching is one line in .env.
+PROVIDER = os.getenv("AI_PROVIDER", "gemini")
+
+def get_feedback(transcript, metrics, rubric) -> dict:
+    prompt = build_prompt(transcript, metrics, rubric)
+    raw = call_muse(prompt) if PROVIDER == "muse" else call_gemini(prompt)
+    return parse_feedback_json(raw)
+Video review (Gemini track): for uploaded recordings, /speech also sends the video to Gemini Flash for body-language and stage-presence notes, added to fixes in the feedback JSON.
+Database (Postgres)
+Table
+Key columns
+sessions
+id, speaker, mode, topic, started_at, overall_score
+metrics
+session_id, wpm, filler_count, pause_count, eye_contact_pct, posture_alerts
+feedback
+session_id, scores (JSON), strengths, fixes, robot_line, transcript
+
+Config: all keys in .env (DEEPGRAM_API_KEY, the AI model key, the TTS key, DATABASE_URL), which is in .gitignore from the first commit.
+Event contract
+This is the one spec everyone builds against. Agree on it at kickoff and change it only by telling the whole team. Every event is JSON over WS /events: {"type": ..., "value": ...}.
+Type
+Value
+Sent by
+Robot does
+Frontend does
+state
+idle / listening / thinking / speaking
+Server
+LED color + head pose
+Status indicator, avatar
+alert
+posture / hands / eye_contact / too_fast / too_quiet / filler
+Browser (vision, volume) or server
+Red LED, head shake, short beep
+Toast on the live view
+lcd
+Text, max 16 chars
+Server
+Shows on the LCD
+(ignored)
+feedback
+Feedback JSON (see Backend)
+Server
+(ignored)
+Scorecard
+metrics
+{wpm, fillers, pauses, ...}
+Server
+(ignored)
+Charts on the scorecard
+hand
+raise / lower
+Server
+Arm servo up or down + LED pulse
+"Robot has a question" banner
+user_present
+(none)
+Bridge, from the PIR sensor
+(it's the sender)
+Starts the session screen
+
+Serial protocol (bridge ↔ Arduino), 9600 baud, one line per message, \n at the end:
+Line
+Direction
+Meaning
+S:<state>
+Laptop → Arduino
+State change
+A:<alert>
+Laptop → Arduino
+Alert reaction
+L:<text>
+Laptop → Arduino
+LCD text (16 chars max)
+H:1 / H:0
+Laptop → Arduino
+Raise / lower hand
+P:1
+Arduino → Laptop
+Someone stepped up
+
+Rules for live alerts
+Only fire if the behavior lasts about 2 s.
+At most one alert of each kind every 12 s.
+During a speech the robot never talks. It uses lights, movement, the LCD and a beep. It speaks only at the end, or when its hand is called on.
+Frontend and computer vision
+The Ionic app is what judges see on screen. Vision runs in the browser, so live alerts never wait on the server.
+Screens (Abhiram)
+Start: pick a mode and type a topic. A "step up" prompt, which also triggers when the robot sees someone.
+Live: webcam preview with a pose overlay, a recording timer, live alert toasts and a volume meter.
+Scorecard: overall score, rubric bars, strengths and fixes, a transcript with filler words highlighted, and pace over time.
+History: past sessions for a speaker, to show improvement.
+Vision module (Kundansai), MediaPipe Pose and Face Landmarker, in the browser:
+Signal
+How
+Difficulty
+Slouching
+Ear-to-shoulder gap ÷ shoulder width, compared with a 3 s baseline
+Easy
+Hands in pockets / hidden
+Both wrists low visibility or at hip level
+Easy
+Swaying
+Hip side-to-side movement over the last few seconds
+Easy
+Gesturing
+Wrist movement while talking (none = stiff, a lot = distracting)
+Easy
+Eye contact
+Head yaw/pitch + iris position facing the camera; reports a %
+Medium
+
+Audio in the browser: record with MediaRecorder and POST to /speech at the end. Measure volume live with the Web Audio API to raise too_quiet alerts.
+Calibration: at the start, the speaker stands naturally for 3 s and every check compares against that baseline. Smooth every signal over about 1 s.
+Camera: the MLH webcams are gone. Use a phone as the webcam (Continuity Camera on iPhone + Mac, DroidCam or Iriun otherwise), at chest height with the upper body in frame. If the vision page runs on the phone itself, open it through the ngrok https:// URL, because phones only allow camera access on https or localhost.
+Replay mode (guaranteed demo): upload a recorded video and play it in a <video> element. MediaPipe analyzes it while it plays, so alerts fire in sync and the robot reacts as if it were live. The vision code takes any video source (camera or file), so both modes share one code path. Record 1–2 demo videos early: slouching, "um"s, hands in pockets.
+Robot hardware
+The robot is an Arduino Mega connected to a laptop over USB. The Mega has no WiFi or Bluetooth, so all commands go through bridge.py.
+Parts on hand (Abhijay's order): ELEGOO Mega 2560 R3 Most Complete Starter Kit + ELEGOO 37-in-1 Sensor Modules Kit. Confirm the box contents (servo count, LCD, breadboard, wires, power module).
+From the MLH hardware lab (ask early, these run out): the JBL Go 3 speaker, so the robot's voice comes from its body; a Grove servo for the arm if the kit has only one; spare breadboard and jumper wires.
+Part
+Behavior
+Servo (head)
+Turns toward the speaker, tilts while thinking, shakes on an alert
+Second servo (arm), if available
+Raises its hand to ask a question
+RGB LED
+Blue = listening, yellow = thinking, green = speaking, red = alert
+LCD 16x2
+Short live messages ("Stand tall!") and the final score
+Buzzer
+Short beep on filler words or alerts
+PIR or ultrasonic sensor
+Detects someone stepping up and sends P:1
+
+Build order: LED → LCD → serial parser → head servo → buzzer → presence sensor → arm servo.
+Notes
+Close the Arduino IDE Serial Monitor before running the bridge. Only one program can use the port at a time.
+Abhijay can test alone by typing S:thinking into the Serial Monitor. No server needed.
+If a servo jitters or the board resets, power the servos from the kit's power module instead of the Mega's 5V pin.
+Don't use the kit's sound sensors for speech. They only measure loudness.
+Coaching modes and rubric
+One pipeline powers every mode. A mode only changes the prompt, the rubric weights and how the robot behaves.
+Mode
+Use case
+What changes
+Presentation (MVP)
+Class talks, pitches
+Full rubric, live alerts, scorecard
+Debate
+Arguing a side
+Rubric weights argument and rebuttal. Robot can ask a counter-question (see Add-ons).
+Interview
+Answering a question
+Robot asks a prompt first, then scores the answer on structure (e.g. STAR)
+Drill
+Fixing one habit
+Only one signal is tracked (e.g. fillers), with instant beeps
+
+Rubric (Abhiram owns; draft):
+Category
+Measured from
+What good looks like
+Structure
+Transcript (AI)
+Clear hook, main points, conclusion
+Clarity
+Transcript (AI) + filler count
+Plain words, few fillers
+Delivery
+WPM, pauses, volume
+Steady pace, purposeful pauses, consistent volume
+Body language
+Posture, gestures, eye contact
+Upright, open hands, looks at the audience
+Persuasion
+Transcript (AI)
+Claims backed by reasons or examples
+Confidence (composite)
+All of the above
+Shown as a score built from measurable behaviors, never "AI detects confidence"
+
+Prompt rules
+Give the model the measured numbers. It explains them; it doesn't guess them.
+Every fix quotes or points to a specific moment.
+Return JSON only, in the schema from the Backend section.
+Keep robot_line short and friendly. It's spoken aloud.
+Add-ons
+Add-ons start only after the MVP demo works end to end. Each one reuses the existing event bus, so most are small.
+Raise hand to speak (signature add-on)
+The robot behaves like a real audience member: it raises its hand with a question, waits to be called on, then asks.
+Trigger. Simple version: after the speech ends, the AI picks the weakest claim and writes one audience question. Stretch version: with Deepgram streaming, the server sends the last ~30 s of transcript to the AI model every ~20 s and asks "is there a question worth raising?"
+Raise. Server sends hand: raise. The arm servo goes up, the LED pulses and the frontend shows "Robot has a question."
+Wait to be called on. The robot waits until the speaker pauses for 2+ s, says a phrase like "yes?", or clicks "Take question."
+Ask. Server sends hand: lower, then speaks the question with TTS. The speaker's answer is recorded and scored as a mini-session.
+Other add-ons, by priority
+Tier
+Add-on
+Owner
+Builds on
+1
+Raise hand to ask a question (simple version)
+Shimal + Abhijay
+hand event, arm servo, TTS
+1
+Filler-word beep + live counter on the LCD
+Abhijay
+alert: filler
+1
+Progress over time (history chart)
+Kundansai
+/history
+2
+Debate mode: robot raises its hand with a sourced counter-claim (SerpApi track)
+Shimal + Abhiram
+SerpApi search + AI prompt + hand event
+2
+Interview mode: robot asks, you answer
+Abhiram
+Mode prompts
+2
+Robot "mood" face on the LCD (happy, confused, bored)
+Abhijay
+state + alerts
+3
+Live hand raise mid-speech (streaming)
+Shimal
+WS /stream
+3
+Uptalk detection (voice rising at the end of statements)
+Kundansai
+Pitch tracking, e.g. librosa.pyin
+3
+Gemini video review of uploads (Gemini track)
+Abhiram
+/speech + Gemini Flash
+
+APIs and accounts
+Set these up in the first hours. If a sponsor offers a "Best use of X" prize and X fits a layer, switch that layer to X.
+Layer
+Choice
+Backup
+Who sets up
+Status
+Speech-to-text
+Deepgram (keeps filler words, word timestamps)
+Muse Voice Transcribe, if it keeps fillers (test early)
+Shimal
+Account made, $200 credit
+AI feedback
+Gemini now, Muse Spark for the Meta track (AI_PROVIDER in .env)
+The other one
+Shimal
+To do
+Text-to-speech
+Deepgram Aura (same Deepgram key)
+Browser speechSynthesis (free)
+Shimal
+To do
+Database
+Postgres (Supabase / Neon, or local)
+SQLite
+Kundansai
+To do
+Computer vision
+MediaPipe (in the browser, no key)
+(none needed)
+Kundansai
+To do
+Tunneling
+ngrok
+Phone hotspot
+Shimal
+To do
+Code
+GitHub repo, all 4 added
+(none needed)
+Shimal
+To do
+Hardware
+Arduino IDE, Mega tested over USB
+(none needed)
+Abhijay
+To do
+
+Key rules: keys only in .env, never in chat or code. Set spending limits where a card is required.
+Smoke test: record a 10 s clip with a few "um"s → Deepgram transcript with fillers → AI returns valid JSON → TTS speaks it.
+Timeline and cut rules
+
+24-hour plan · 4 phases, 3 gates
+Hour 12 is the gate that matters. If one full speech doesn't work end to end by then, every add-on waits.
+Cut rules (agreed at kickoff)
+Hour 12, hardware go/no-go: if the robot doesn't respond to live events, switch to the on-screen avatar. Abhijay moves to testing and Devpost.
+Hour 12, live alerts: if vision is unreliable, keep posture only and drop eye contact.
+Hour 18, feature freeze: after this, only bug fixes and demo polish.
+Any time: a feature that blocks the MVP for over 1 hour gets cut or simplified. Shimal makes the call after hearing the owner.
+First hours checklist
+☐ Event hub running with a fake-event test route; all API keys in .env
+☐ Smoke test passes (clip → transcript → JSON → voice)
+☐ Abhijay has tested the Mega over USB
+☐ Everyone has read this doc and the event contract
+☐ Muse API access confirmed (ask at Meta's table); phone webcam working or replay mode planned
+Risks, demo and pitch
+Risks and fallbacks
+Risk
+Fallback
+Hardware not ready by the cutoff
+On-screen avatar reacts to the same events. Abhijay moves to testing and Devpost.
+Venue WiFi blocks devices from reaching each other
+Everything on one laptop, or a phone hotspot + ngrok
+An API key runs out mid-demo
+Backup provider configured. Browser TTS as voice fallback.
+Slow AI response kills the demo
+Use a fast model, keep prompts short, show a "thinking" state on the robot
+Vision misfires in venue lighting
+Calibrate on site. Raise alert thresholds. Demo with posture only if needed.
+Two people editing the same backend file
+Separate files and routes. run_session and get_feedback are the only shared functions.
+Muse API access is slow or blocked
+Stay on Gemini via AI_PROVIDER. Ask at Meta's table early.
+
+Demo script (about 3 min)
+Abhiram steps up. The robot wakes (PIR), turns its head and lights blue.
+He starts a 45 s speech and slouches on purpose. The robot shakes its head, the LED goes red and the LCD says "Stand tall!"
+He says "um" a few times. The buzzer beeps and the LCD counter goes up.
+He finishes. The robot raises its hand, gets called on and asks a sharp question about his weakest claim.
+The scorecard appears: overall score, rubric bars, highlighted fillers. The robot speaks its one-line coaching tip.
+Pitch (Shimal leads)
+Problem: the moments that bring people together (toasts, talks, first conversations) are the ones people dread speaking in, and coaching is expensive and rare.
+Product: a robot practice audience that reacts live and gives measurable feedback, so you show up confident for the real audience.
+Why it's credible: scores come from measured behavior. The rubric is built from Abhiram's real TEDx coaching experience.
+Tech: custom metrics, live computer vision, Meta's Muse models, an event-driven pipeline and real hardware.
+Responsible design: audio and video aren't stored without consent.
+Next: wedding toasts, classrooms, debate teams, interview prep.
