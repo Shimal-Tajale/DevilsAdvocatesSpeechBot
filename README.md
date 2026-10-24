@@ -1,0 +1,2 @@
+# DevilsAdvocatesSpeechBot
+HackTx Entry
