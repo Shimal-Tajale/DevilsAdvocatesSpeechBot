@@ -1,15 +1,33 @@
-import asyncio
+import os
+
+from deepgram import AsyncDeepgramClient
 
 from backend.events import broadcast
 
-# Stub: every step returns fake data in the real shape, so the frontend,
-# robot and routes can integrate before Deepgram / AI / Postgres are wired.
+# Steps not yet wired return fake data in the real shape, so the frontend,
+# robot and routes can integrate before AI / Postgres are done.
 
-FAKE_TRANSCRIPT = "Um, so today I want to talk about, uh, why sleep matters."
+_deepgram: AsyncDeepgramClient | None = None
+
+
+def _deepgram_client() -> AsyncDeepgramClient:
+    global _deepgram
+    if _deepgram is None:
+        # Read at call time; the SDK's own default is captured at import.
+        _deepgram = AsyncDeepgramClient(api_key=os.getenv("DEEPGRAM_API_KEY"))
+    return _deepgram
 
 
 async def transcribe(audio: bytes) -> dict:
-    return {"transcript": FAKE_TRANSCRIPT, "words": []}
+    response = await _deepgram_client().listen.v1.media.transcribe_file(
+        request=audio, model="nova-3", smart_format=True, filler_words=True)
+    alt = response.results.channels[0].alternatives[0]
+    return {
+        "transcript": alt.transcript,
+        "words": [{"word": w.word, "start": w.start, "end": w.end}
+                  for w in alt.words],
+        "duration": response.metadata.duration,
+    }
 
 
 def compute_metrics(transcription: dict) -> dict:
@@ -40,7 +58,6 @@ async def save_session(result: dict) -> None:
 
 async def run_session(audio: bytes, vision: dict | None = None) -> dict:
     await broadcast({"type": "state", "value": "thinking"})
-    await asyncio.sleep(1)  # stand-in for API latency so "thinking" is visible
 
     transcription = await transcribe(audio)
     metrics = compute_metrics(transcription)
