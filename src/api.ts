@@ -2,57 +2,87 @@
 // Later, replace the mock bodies with fetch('/api/...') calls (relative URLs,
 // proxied by Vite) and nothing else changes. Never hardcode localhost or ports.
 import type {
-  DebateSetup,
-  InterviewSetup,
   LiveEvent,
-  PublicSpeakingSetup,
   Results,
-  SessionInfo,
+  Session,
+  SessionCreate,
+  SpeechResponse,
 } from './types'
+
+// Real routes (see API_CONTRACT.md). The dev proxy maps /api/* and /ws/* to the
+// backend root, so POST /api/sessions reaches the backend's POST /sessions.
 
 const delay = <T>(value: T, ms = 600): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), ms))
 
-export function startSession(
-  _mode: 'publicSpeaking' | 'debate' | 'interview',
-  _setup: PublicSpeakingSetup | DebateSetup | InterviewSetup,
-): Promise<SessionInfo> {
-  return delay({ sessionId: 'mock-session-1' })
+// POST /sessions -- already in the backend
+export function startSession(data: SessionCreate): Promise<Session> {
+  return delay({ session_id: 'mock-session-1', ...data })
 }
 
-export function getNextQuestion(_sessionId: string): Promise<string> {
-  return delay('You mentioned your main point. Can you expand on that?')
+// GET /sessions/{session_id} -- already in the backend (returns the setup only)
+export function getSession(sessionId: string): Promise<Session> {
+  return delay({ session_id: sessionId, speaker: 'Guest', mode: 'publicSpeaking', topic: 'Mock topic' })
 }
 
-export function submitAnswer(_sessionId: string, _audio?: Blob): Promise<void> {
-  return delay(undefined)
+// GET /history/{speaker} -- already in the backend (setups only, no scores)
+export function getHistory(_speaker: string): Promise<Session[]> {
+  return delay([])
 }
 
+// POST /speech (multipart field "audio") -- already in the backend, but metrics
+// and feedback are still fake there
+export function analyzeSpeech(_audio?: Blob): Promise<SpeechResponse> {
+  return delay(mockSpeech, 1200)
+}
+
+// NOT in the backend yet: rich results (12 criteria, categories, flagged transcript)
 export function getResults(_sessionId: string): Promise<Results> {
   return delay(mockResults, 900)
 }
 
-// Builds the WebSocket URL from window.location so it works through ngrok.
-export function liveSocketUrl(sessionId: string): string {
-  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${scheme}//${window.location.host}/ws/live/${sessionId}`
+// NOT in the backend yet: mascot follow-up question (hand-raise Q&A)
+export function getNextQuestion(_sessionId: string): Promise<string> {
+  return delay('You mentioned your main point. Can you expand on that?')
 }
 
-// Mock live feed: emits a few fake events on a timer. Returns an unsubscribe fn.
-export function subscribeLive(
-  _sessionId: string,
-  onEvent: (event: LiveEvent) => void,
-): () => void {
+// Builds the WebSocket URL from window.location so it works through ngrok.
+// Backend path is /events; the /ws prefix is stripped by the dev proxy.
+export function eventsSocketUrl(): string {
+  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${scheme}//${window.location.host}/ws/events`
+}
+
+// WS /events, receiving. Mock: emits a few backend-shaped events on a timer.
+// Returns an unsubscribe function.
+export function subscribeLive(onEvent: (event: LiveEvent) => void): () => void {
   const events: LiveEvent[] = [
-    { type: 'mood', value: 'listening' },
-    { type: 'indicator', id: 'filler_words', value: 1, status: 'ok' },
-    { type: 'indicator', id: 'pace', value: 172, status: 'warn' },
-    { type: 'indicator', id: 'volume', value: 0.6, status: 'ok' },
-    { type: 'indicator', id: 'eye_contact', value: 0.8, status: 'ok' },
-    { type: 'mood', value: 'happy' },
+    { type: 'state', value: 'listening' },
+    { type: 'alert', value: 'filler' },
+    { type: 'alert', value: 'too_fast' },
+    { type: 'alert', value: 'eye_contact' },
+    { type: 'state', value: 'thinking' },
+    { type: 'state', value: 'speaking' },
+    { type: 'state', value: 'idle' },
   ]
   const timers = events.map((e, i) => setTimeout(() => onEvent(e), 1500 * (i + 1)))
   return () => timers.forEach(clearTimeout)
+}
+
+// WS /events, sending. The browser sends alerts (vision, volume) and the backend
+// rebroadcasts them to everyone. Mock: no-op.
+export function sendEvent(_event: LiveEvent): void {}
+
+const mockSpeech: SpeechResponse = {
+  transcript: 'Um, so today I want to talk about, uh, why sleep matters.',
+  metrics: { wpm: 142, fillers: 2, filler_list: ['um', 'uh'], pauses: 1, longest_pause: 2.4, speaking_time: 45.0 },
+  feedback: {
+    scores: { structure: 7, clarity: 8, delivery: 6, persuasion: 7, confidence: 6 },
+    overall: 68,
+    strengths: ['Strong opening hook'],
+    fixes: ["Cut 'um' before key points", 'Pause after your main claim'],
+    robot_line: 'Great hook! Next time, slow down in the middle.',
+  },
 }
 
 const mockResults: Results = {
