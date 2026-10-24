@@ -107,7 +107,7 @@ In interview and debate modes the mascot speaks when it is its turn, since those
 
 Cosmetic extras: a costume per mode (glasses and podium for speaking, tie for interview, gavel for debate).
 
-Mascot design: **[FILL IN once picked: animal/character, colors, personality]**. Until then, build a simple friendly SVG blob with big eyes and animate moods with Framer Motion. Keep the art simple so it's easy to swap.
+Earnest, a round, friendly bunny. Ears show mood: perked when engaged, drooping when bored, one ear flopped when confused. Big eyes, tiny arms, simple flat shapes using the palette below. Personality: encouraging, a little goofy, never judgmental. Animate moods with Framer Motion. Keep the art simple so it's easy to swap.
 
 ## Live indicators (public speaking, debate)
 
@@ -179,7 +179,13 @@ TypeScript types for these live in `src/types.ts`. Keep them in sync with this d
 
 - Friendly, encouraging, approachable. Never intimidating or clinical.
 - Rounded shapes, generous spacing, one memorable element (the mascot).
-- Make deliberate choices for palette and typography specific to this product rather than generic defaults: **[FILL IN palette and font choices once decided]**.
+- Make deliberate choices for palette and typography specific to this product rather than generic defaults: Palette: plum ink 
+#2B2140, lavender 
+#B9A7F5, mint 
+#8FE3C0, butter yellow 
+#FFD86B, warm white 
+#FBFAFF, coral 
+#FF7A6B for alerts. Fonts: Fredoka for headings, Figtree for body text.
 - Motion should respond to user actions or mascot state, not decorate every element.
 - Plain, supportive copy in sentence case, with buttons that say exactly what they do ("Start speaking", "Call on mascot", "See results").
 - Responsive down to phone width (users may be on a phone), visible keyboard focus, respect reduced motion.
@@ -201,3 +207,5 @@ TypeScript types for these live in `src/types.ts`. Keep them in sync with this d
 - After each step, summarize what you built and how to see it.
 - Don't add libraries beyond the stack above without asking.
 - Don't build real audio analysis, speech-to-text, or LLM calls. Mock everything.
+
+Never edit files in backend/, bridge/, hardware/ or docs/. Read them for reference only.
