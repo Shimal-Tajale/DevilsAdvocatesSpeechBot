@@ -13,3 +13,6 @@ venv/
 # JavaScript
 node_modules/
 dist/
+
+# Personal AI-assistant instructions (each teammate keeps their own)
+CLAUDE.md
