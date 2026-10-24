@@ -1,5 +1,15 @@
-.env
-venv/
+
+# Python
 __pycache__/
 *.pyc
+.pytest_cache/
+venv/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# JavaScript
 node_modules/
+dist/

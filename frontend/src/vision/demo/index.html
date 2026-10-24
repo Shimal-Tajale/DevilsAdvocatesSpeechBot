@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Speech Coach · Webcam Vision Demo</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "@mediapipe/tasks-vision": "../node_modules/@mediapipe/tasks-vision/vision_bundle.mjs"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">Speech Coach / Vision lab</p>
+        <h1>Practice in view.</h1>
+        <p>Stand upright, face the camera, and keep your ears, shoulders and hips in view.
+          Hold your starting posture for about three seconds to calibrate.</p>
+      </header>
+
+      <div class="layout">
+        <section class="preview" aria-label="Webcam preview">
+          <div class="video-stage">
+            <video id="video" autoplay muted playsinline aria-label="Live mirrored webcam preview"></video>
+            <canvas id="landmarks" aria-hidden="true"></canvas>
+          </div>
+          <p>Mirrored preview · one speaker · no audio requested</p>
+          <p class="hint">Green: pose skeleton · white: confident pose points · amber: low visibility · blue: face outline</p>
+          <div class="controls">
+            <button id="start" type="button" disabled>Start Camera</button>
+            <button id="stop" type="button" disabled>Stop Camera</button>
+            <button id="recalibrate" type="button" disabled>Recalibrate</button>
+          </div>
+          <p id="camera-status" role="status">Loading demo…</p>
+          <p id="error" role="alert" hidden></p>
+          <details open>
+            <summary>Tracking diagnostics</summary>
+            <pre id="diagnostics">Waiting for processed frames.</pre>
+          </details>
+        </section>
+
+        <section class="panel" aria-label="Vision results">
+          <h2>Calibration</h2>
+          <label for="calibration" id="calibration-status">Camera is off</label>
+          <progress id="calibration" max="1" value="0">0%</progress>
+          <p id="calibration-blockers" class="hint">Start the camera to check calibration readiness.</p>
+          <h2>Current conditions</h2>
+          <p class="hint">Conditions are live measurements. Alerts below are emitted only after
+            about two seconds, with a twelve-second cooldown per alert type.</p>
+          <dl>
+            <div><dt>Posture / sway</dt><dd id="posture">Waiting for camera</dd></div>
+            <div><dt>Hands</dt><dd id="hands">Waiting for camera</dd></div>
+            <div><dt>Head orientation</dt><dd id="eye_contact">Waiting for camera</dd></div>
+          </dl>
+          <p id="head-measurements" class="hint">Head orientation is a proxy, not eye tracking.</p>
+          <h2>Emitted alerts</h2>
+          <p id="no-alerts">No alerts yet.</p>
+          <ol id="alerts" aria-label="Recent emitted alerts" aria-live="polite"></ol>
+        </section>
+      </div>
+      <footer>Camera frames are processed by the existing browser vision module. No recording
+        or WebSocket connection is created by this demo.</footer>
+    </main>
+    <script type="module">
+      // Surface broken builds/imports in the page instead of leaving disabled buttons.
+      import('./.build/demo/main.js').catch(error => {
+        document.getElementById('camera-status').textContent = 'Demo could not load';
+        const message = document.getElementById('error');
+        message.hidden = false;
+        message.textContent = 'Run npm ci and npm exec -- tsc -p demo/tsconfig.json from '
+          + 'frontend/src/vision, then serve that directory and open /demo/. Details: ' + error;
+      });
+    </script>
+  </body>
+</html>
