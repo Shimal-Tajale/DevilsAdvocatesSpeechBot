@@ -27,6 +27,7 @@ This is a 12-hour hackathon. The Python backend (speech analysis, LLM calls) is 
    Turning a flag off must cleanly hide the nav item, panel, or button. Features that are off but planned show a "Coming soon" badge on the home screen.
 4. **Shared components, thin screens.** Each mode is a configuration of shared components, not a copy-pasted page.
 5. **Commit-friendly.** Build one screen or component at a time, keep the app runnable after every step, and tell me what to look at.
+6. **Never edit teammates' folders.** Do not edit anything in `backend/`, `bridge/`, `hardware/` or `docs/`. Read them for reference only. Frontend files live at the repo root (`src/`, `index.html`, `vite.config.ts`, etc.).
 
 ## Tech stack
 
@@ -207,5 +208,3 @@ TypeScript types for these live in `src/types.ts`. Keep them in sync with this d
 - After each step, summarize what you built and how to see it.
 - Don't add libraries beyond the stack above without asking.
 - Don't build real audio analysis, speech-to-text, or LLM calls. Mock everything.
-
-Never edit files in backend/, bridge/, hardware/ or docs/. Read them for reference only.

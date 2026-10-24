@@ -1,14 +1,19 @@
-// Keep in sync with the data contracts in CLAUDE.md.
+// Keep in sync with API_CONTRACT.md. Types marked "backend" mirror what the Python
+// server already returns; types marked "frontend" are view models the backend does
+// not provide yet (see API_CONTRACT.md for which is which).
 
-export type Mood =
-  | 'idle'
-  | 'listening'
-  | 'confused'
-  | 'bored'
-  | 'handRaised'
-  | 'speaking'
-  | 'happy'
-  | 'thinking'
+export const MOODS = [
+  'idle',
+  'listening',
+  'confused',
+  'bored',
+  'handRaised',
+  'speaking',
+  'happy',
+  'thinking',
+] as const
+
+export type Mood = (typeof MOODS)[number]
 
 export type CategoryId = 'voice' | 'body' | 'content'
 
@@ -47,6 +52,7 @@ export interface TranscriptWord {
   flag?: TranscriptFlag
 }
 
+// frontend view model: the backend does not return this yet (API_CONTRACT.md, section 3.2)
 export interface Results {
   overall: number
   categories: CategoryScore[]
@@ -55,25 +61,62 @@ export interface Results {
   questions: string[]
 }
 
-export type IndicatorId = 'filler_words' | 'pace' | 'volume' | 'eye_contact'
-export type IndicatorStatus = 'ok' | 'warn' | 'alert'
+// ---- backend: POST /speech response (backend/pipeline.py run_session) ----
 
-// WebSocket events
-export interface IndicatorEvent {
-  type: 'indicator'
-  id: IndicatorId
-  value: number
-  status: IndicatorStatus
+export interface SpeechMetrics {
+  wpm: number
+  fillers: number
+  filler_list: string[]
+  pauses: number // pauses over 2 s
+  longest_pause: number // seconds
+  speaking_time: number // seconds
+  // Browser vision stats are merged in here by run_session, shape not settled yet.
+  [vision: string]: unknown
 }
 
-export interface MoodEvent {
-  type: 'mood'
-  value: Mood
+export interface SpeechFeedback {
+  scores: {
+    structure: number
+    clarity: number
+    delivery: number
+    persuasion: number
+    confidence: number
+  } // each 0-10
+  overall: number // 0-100
+  strengths: string[]
+  fixes: string[]
+  robot_line: string // short line the robot speaks at the end
 }
 
-export type LiveEvent = IndicatorEvent | MoodEvent
+export interface SpeechResponse {
+  transcript: string
+  metrics: SpeechMetrics
+  feedback: SpeechFeedback
+}
 
-// Setup payloads
+// ---- backend: WebSocket /events, every message is {type, value} ----
+
+export type BackendState = 'idle' | 'listening' | 'thinking' | 'speaking'
+export type AlertKind = 'posture' | 'hands' | 'eye_contact' | 'too_fast' | 'too_quiet' | 'filler'
+
+export interface StateEvent { type: 'state'; value: BackendState }
+export interface AlertEvent { type: 'alert'; value: AlertKind }
+export interface LcdEvent { type: 'lcd'; value: string } // max 16 chars, robot only
+export interface FeedbackEvent { type: 'feedback'; value: SpeechFeedback }
+export interface MetricsEvent { type: 'metrics'; value: SpeechMetrics }
+export interface HandEvent { type: 'hand'; value: 'raise' | 'lower' }
+export interface UserPresentEvent { type: 'user_present'; value: null }
+
+export type LiveEvent =
+  | StateEvent
+  | AlertEvent
+  | LcdEvent
+  | FeedbackEvent
+  | MetricsEvent
+  | HandEvent
+  | UserPresentEvent
+
+// Setup payloads (frontend forms; the backend only accepts `topic` so far, see API_CONTRACT.md)
 export interface PublicSpeakingSetup {
   topic: string
   targetMinutes: number
@@ -95,6 +138,14 @@ export interface InterviewSetup {
   feedbackTiming: 'each' | 'end'
 }
 
-export interface SessionInfo {
-  sessionId: string
+// ---- backend: /sessions ----
+
+export interface SessionCreate {
+  speaker: string
+  mode: string // free string on the backend; the frontend sends a ModeId
+  topic: string
+}
+
+export interface Session extends SessionCreate {
+  session_id: string // UUID4
 }

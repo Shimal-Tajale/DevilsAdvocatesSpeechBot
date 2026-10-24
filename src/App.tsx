@@ -1,5 +1,6 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { features } from './features'
+import Home from './screens/Home'
 
 function Placeholder({ title }: { title: string }) {
   return (
@@ -14,7 +15,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Placeholder title="Speech coach" />} />
+        <Route path="/" element={<Home />} />
         {features.modes.publicSpeaking && (
           <Route path="/public-speaking/*" element={<Placeholder title="Public speaking" />} />
         )}
