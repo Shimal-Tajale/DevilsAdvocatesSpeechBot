@@ -2,10 +2,11 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.events import clients, broadcast
+from backend.pipeline import run_session
 from backend.routes import sessions
 
 app = FastAPI(title="Devil's Advocates Speech Bot")
@@ -23,6 +24,10 @@ async def events_ws(ws: WebSocket):
             await broadcast(event)
     except WebSocketDisconnect:
         clients.discard(ws)
+
+@app.post("/speech")
+async def speech(audio: UploadFile = File(...)):
+    return await run_session(await audio.read())
 
 @app.post("/test/{type}/{value}")
 async def test_event(type: str, value: str):
