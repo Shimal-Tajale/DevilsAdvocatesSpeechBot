@@ -1,0 +1,14 @@
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# JavaScript
+node_modules/
+dist/
