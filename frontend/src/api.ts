@@ -4,6 +4,7 @@
 // features.useMocks true: every function returns mock data. See API_CONTRACT.md.
 import { features } from './features'
 import type {
+  AudienceQuestion,
   EventsMessage,
   Session,
   SessionCreate,
@@ -53,6 +54,27 @@ export function getSession(session_id: string): Promise<Session> {
   if (!features.useMocks) return http<Session>(`/sessions/${encodeURIComponent(session_id)}`)
   const found = mockSessions.find((s) => s.session_id === session_id)
   return found ? delay(found) : Promise.reject(new Error('Session not found'))
+}
+
+// POST /sessions/{session_id}/question. Spends one web search, so call it only when
+// the speaker calls on the mascot.
+export function askQuestion(session_id: string): Promise<AudienceQuestion> {
+  if (!features.useMocks) {
+    return http<AudienceQuestion>(`/sessions/${encodeURIComponent(session_id)}/question`, { method: 'POST' })
+  }
+  return delay(
+    {
+      question: 'A survey I found ranks public speaking below several other fears. Where does your claim come from?',
+      claim: 'Most people fear public speaking more than death',
+      search_query: 'fear of public speaking vs death statistics',
+      source: {
+        title: 'Survey of American Fears',
+        url: 'https://example.com/fear-survey',
+        snippet: 'Public speaking ranked behind several other fears.',
+      },
+    },
+    2000,
+  )
 }
 
 // GET /history/{speaker}

@@ -129,6 +129,15 @@ export interface SessionResults {
   feedback: Feedback
 }
 
+// POST /sessions/{session_id}/question: the mascot's audience question after a speech,
+// from one web search. source is null when nothing useful was found (or no search key).
+export interface AudienceQuestion {
+  question: string
+  claim: string
+  search_query: string
+  source: { title: string; url: string; snippet: string } | null
+}
+
 // POST /speech response.
 export interface SpeechResponse extends SessionResults {
   session_id: string | null // null when the request had no session_id

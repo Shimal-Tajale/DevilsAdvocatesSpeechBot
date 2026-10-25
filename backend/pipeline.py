@@ -3,8 +3,10 @@ import json
 import logging
 import os
 import re
+from urllib.parse import urlsplit
 from uuid import UUID
 
+import httpx
 from deepgram import AsyncDeepgramClient
 from google import genai
 from google.genai import errors, types
@@ -186,7 +188,7 @@ def _gemini_client() -> genai.Client:
 GEMINI_MODELS = "gemini-3.5-flash-lite,gemini-3.8-flash,gemini-2.5-flash"
 
 
-async def call_gemini(prompt: str) -> str:
+async def call_gemini(prompt: str, schema: type[BaseModel] = Feedback) -> str:
     models = os.getenv("GEMINI_MODELS", GEMINI_MODELS).split(",")
     for model in models:
         try:
@@ -194,7 +196,7 @@ async def call_gemini(prompt: str) -> str:
                 model=model.strip(),
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    response_mime_type="application/json", response_schema=Feedback))
+                    response_mime_type="application/json", response_schema=schema))
             return response.text
         except errors.APIError as e:
             if e.code not in (429, 500, 503) or model == models[-1]:
@@ -210,6 +212,95 @@ async def get_feedback(transcript: str, metrics: dict, session: dict | None = No
     if os.getenv("AI_PROVIDER", "gemini") == "muse":
         raise NotImplementedError("Muse provider not wired yet; set AI_PROVIDER=gemini")
     return parse_feedback_json(await call_gemini(prompt))
+
+
+# ---- audience question (after the speech; one web search per question) ----
+
+class SearchPlan(BaseModel):
+    claim: str
+    search_query: str
+
+
+class Question(BaseModel):
+    question: str
+    source_index: int | None  # 1-based number of the search result it rests on
+
+
+# Social posts mostly repeat claims (often myths); they make poor sources.
+SKIP_SOURCES = re.compile(r"(^|\.)(linkedin|facebook|instagram|tiktok|twitter|x|reddit|quora|"
+                          r"youtube|pinterest)\.com$")
+
+
+async def web_search(query: str) -> list[dict]:
+    """One Google search through SerpApi: up to 3 results with title, url, snippet.
+
+    Returns [] without SERPAPI_API_KEY or if the search fails, so the question
+    is still asked, just without a source."""
+    key = os.getenv("SERPAPI_API_KEY")
+    if not key:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get("https://serpapi.com/search.json", params={
+                "engine": "google", "q": query, "api_key": key, "num": 10, "hl": "en"})
+            response.raise_for_status()
+            data = response.json()
+    except Exception as error:
+        # Never log the exception text: httpx puts the request URL, key included, in it.
+        reason = type(error).__name__
+        if isinstance(error, httpx.HTTPStatusError):
+            try:
+                reason = f"HTTP {error.response.status_code}: {error.response.json().get('error', '')}"
+            except Exception:
+                reason = f"HTTP {error.response.status_code}"
+        logger.warning("Web search failed, asking without a source: %s", reason)
+        return []
+    hits = [data.get("answer_box") or {}, *data.get("organic_results", [])]
+    return [{"title": h.get("title", ""), "url": h["link"],
+             "snippet": h.get("snippet") or h.get("answer") or ""}
+            for h in hits if h.get("link") and (h.get("snippet") or h.get("answer"))
+            and not SKIP_SOURCES.search(urlsplit(h["link"]).hostname or "")][:3]
+
+
+async def ask_question(session: dict, results: dict) -> dict:
+    """The robot's one audience question: pick a claim, search it once, ask about it."""
+    transcript = results["transcript"]
+    plan = SearchPlan.model_validate_json(await call_gemini(f"""You are an engaged audience member at a practice speech.
+Topic: {session['topic']}
+
+Transcript:
+\"\"\"{transcript}\"\"\"
+
+Pick the ONE claim most worth checking: a fact, number or bold generalisation. If there
+is none, pick the speech's main point. Write a short Google search query that would find
+research, survey data or reputable reporting on it (words like "study" or "survey" help).
+Return JSON only.""", SearchPlan))
+
+    sources = await web_search(plan.search_query)
+    listed = "\n".join(f"{i}. {s['title']}: {s['snippet']} ({s['url']})"
+                       for i, s in enumerate(sources, 1)) or "No search results."
+    asked = Question.model_validate_json(await call_gemini(f"""You raised your hand after this practice speech and were called on.
+The claim you are asking about: "{plan.claim}"
+
+Search results:
+{listed}
+
+Ask ONE short, friendly but sharp question, under 30 words; it is spoken aloud.
+- It must make the speaker defend or deepen the claim: ask for their evidence, raise a
+  counterpoint, or ask where it stops being true. Never just agree, and never ask
+  "did you know".
+- Trust research, surveys, universities, governments and established news over pages
+  that only repeat the claim.
+- If a trustworthy result contradicts or complicates the claim, build the question on it
+  and set source_index to its number. Otherwise set source_index to null and ask the
+  speaker where the claim comes from.
+- If the claim is about the speaker's own experience, ask a curious follow-up instead.
+- Never state facts that are not in the results. Return JSON only.""",
+        Question))
+
+    n = asked.source_index
+    return {"question": asked.question, "claim": plan.claim, "search_query": plan.search_query,
+            "source": sources[n - 1] if n and 1 <= n <= len(sources) else None}
 
 
 class NoSpeechError(ValueError):
@@ -253,6 +344,8 @@ async def run_session(audio: bytes, vision: VisionStats | None = None,
                   "transcript": transcription["transcript"],
                   "metrics": metrics, "feedback": feedback}
         result["saved"] = await save_session(result)
+        if session:  # it has a question; POST /sessions/{id}/question lowers the hand
+            await broadcast({"type": "hand", "value": "raise"})
         return result
     except Exception:
         await broadcast({"type": "lcd", "value": "Try again"})

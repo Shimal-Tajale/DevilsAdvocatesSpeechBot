@@ -137,6 +137,7 @@ export default function Session({ mode }: { mode: ModeId }) {
     if (recorder.state === 'recording') {
       visionRecord()
       send({ type: 'state', value: 'listening' })
+      send({ type: 'hand', value: 'lower' }) // drop any question left from the last speech
     } else if (recorder.state === 'paused') {
       visionPause()
     } else if (recorder.state === 'review') {

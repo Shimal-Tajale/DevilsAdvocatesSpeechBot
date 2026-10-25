@@ -3,6 +3,7 @@ import { Link, useLocation, useParams } from 'react-router-dom'
 import { getSession, mockResultsByVariant, type MockVariant } from '@/api'
 import { DevMockToggle } from '@/components/DevMockToggle'
 import { Mascot } from '@/components/Mascot'
+import { QuestionCard } from '@/components/QuestionCard'
 import { LabelChip, NotScoredRow, ScoreBar } from '@/components/ScoreBar'
 import { ScoreRing } from '@/components/ScoreRing'
 import { features } from '@/features'
@@ -163,6 +164,8 @@ export default function Results() {
           <blockquote className="font-heading text-lg">&ldquo;{feedback.robot_line}&rdquo;</blockquote>
           <figcaption className="mt-1 text-sm text-muted-foreground">Earnest</figcaption>
         </figure>
+
+        {features.mascotQuestions && session_id && <QuestionCard sessionId={session_id} />}
 
         <section aria-labelledby="scores-heading" className="flex flex-col gap-6 rounded-3xl border-2 border-mode bg-card p-5">
           <h2 id="scores-heading" className="text-xl font-semibold">

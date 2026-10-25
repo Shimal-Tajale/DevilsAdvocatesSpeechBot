@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from backend.events import clients, broadcast
-from backend.pipeline import NoSpeechError, VisionStats, run_session
+from backend.pipeline import NoSpeechError, VisionStats, ask_question, run_session
 from backend.routes import sessions
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,23 @@ async def speech(audio: UploadFile = File(...),
     except Exception as e:
         logger.exception("Speech pipeline failed")
         raise HTTPException(status_code=502, detail=f"Speech analysis failed: {e}")
+
+# The robot's audience question, asked when the speaker calls on it after the speech.
+# One web search per call, so the frontend only calls it on request.
+@app.post("/sessions/{session_id}/question")
+async def question(session_id: UUID):
+    found = await asyncio.to_thread(sessions.get_session_store().get, session_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if found.results is None:
+        raise HTTPException(status_code=409, detail="Record a speech for this session first")
+    try:
+        asked = await ask_question(found.model_dump(mode="json"), found.results)
+    except Exception as e:
+        logger.exception("Question failed")
+        raise HTTPException(status_code=502, detail=f"Could not come up with a question: {e}")
+    await broadcast({"type": "hand", "value": "lower"})  # called on: hand down, then ask
+    return asked
 
 @app.post("/test/{type}/{value}")
 async def test_event(type: str, value: str):
