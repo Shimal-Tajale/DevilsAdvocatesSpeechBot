@@ -1,20 +1,38 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { VisionAnalysis } from '../analysis.js';
-import { SENSITIVE_ANALYSIS, handsSummary } from '../sensitivity.js';
+import { RECORDING_POSTURE_ANALYSIS, SENSITIVE_ANALYSIS, handsSummary } from '../sensitivity.js';
 import { measure } from '../measurements.js';
 import type { AnalysisStatus, Landmark, Measurements, VisionAlert } from '../types.js';
 
 const upright: Measurements = { neckHeight: .5, torsoHeight: 1.5, headYaw: 0, headPitch: .5,
   leftWristVisibility: 1, rightWristVisibility: 1, bodyX: .5, shoulderWidth: .2, handsLow: 0, leftWristX: -.3, leftWristY: 1.5, rightWristX: .3, rightWristY: 1.5 };
-function run(sensitive: boolean, motion: (t: number) => Measurements) {
+function run(sensitive: boolean, motion: (t: number) => Measurements, recording = false) {
   const alerts: VisionAlert[] = [];
-  const analysis = new VisionAnalysis(e => alerts.push(e), sensitive ? SENSITIVE_ANALYSIS : {});
+  const analysis = new VisionAnalysis(e => alerts.push(e), recording ? RECORDING_POSTURE_ANALYSIS : sensitive ? SENSITIVE_ANALYSIS : {});
   let status!: AnalysisStatus;
   for (let t = 0; t <= 3000; t += 100) analysis.update(upright, t);
   for (let t = 3100; t <= 15000; t += 100) status = analysis.update(motion(t - 3100), t);
   return { status, alerts };
 }
+
+test('React configuration detects smaller slouch, sway and fidget without relaxing tracking gates', () => {
+  const slouch = () => ({ ...upright, torsoHeight: 1.42 });
+  const sway = (t: number) => ({ ...upright, bodyX: .5 + .035 * Math.sin(t * Math.PI / 1200) });
+  assert.ok(run(false, slouch, true).alerts.some(e => e.value === 'posture'));
+  assert.ok(run(false, sway, true).alerts.some(e => e.value === 'posture'));
+  assert.equal(run(false, () => upright, true).alerts.length, 0);
+  assert.equal(run(false, () => ({ ...upright, bodyX: .7 }), true).alerts.length, 0);
+  const fidget = (t: number) => ({ ...upright, leftWristX: -.3 + .075 * Math.sin(t * Math.PI / 500) });
+  assert.ok(run(false, fidget, true).alerts.some(e => e.value === 'hands'));
+  assert.equal(run(false, t => ({ ...fidget(t), leftWristVisibility: .4, rightWristVisibility: .4 }), true).alerts.length, 0);
+  assert.equal(run(false, () => ({ ...upright, neckHeight: .1 }), true).alerts.length, 0);
+  const original = new VisionAnalysis(() => {}).options;
+  const configured = new VisionAnalysis(() => {}, RECORDING_POSTURE_ANALYSIS).options;
+  for (const key of ['pocketVisibility', 'yawThreshold', 'pitchThreshold', 'cooldownMs', 'sustainedMs'] as const) {
+    assert.equal(configured[key], original[key]);
+  }
+});
 
 test('sensitive preset admits smaller sustained torso compression without using head drop', () => {
   const motion = () => ({ ...upright, torsoHeight: 1.38 });

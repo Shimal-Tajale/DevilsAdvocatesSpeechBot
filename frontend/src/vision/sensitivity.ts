@@ -8,6 +8,18 @@ export const SENSITIVE_ANALYSIS: Readonly<Partial<AnalysisOptions>> = {
   pocketVisibility: 0.55, pocketInwardTravel: 0.05, pocketBaselineSamples: 3,
 };
 
+/** Recording tuning: smaller torso compression and the demo's fidget sensitivity.
+ * Provisional until checked against physical-camera traces. Visibility gates stay intact.
+ */
+export const RECORDING_POSTURE_ANALYSIS = {
+  torsoDropFraction: 0.04,
+  torsoDropAbsolute: 0.04,
+  swayThreshold: SENSITIVE_ANALYSIS.swayThreshold,
+  swayReversals: SENSITIVE_ANALYSIS.swayReversals,
+  wristExcursion: SENSITIVE_ANALYSIS.wristExcursion,
+  wristReversals: SENSITIVE_ANALYSIS.wristReversals,
+} as const;
+
 /** Describe visible normal geometry separately from missing entry calibration. */
 export function handsSummary(status: AnalysisStatus): string {
   const raw = status.debug?.raw ?? status.measurements;

@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+venv/
 
 # Environment variables
 .env
@@ -12,3 +13,6 @@ __pycache__/
 # JavaScript
 node_modules/
 dist/
+
+# Personal AI-assistant instructions (each teammate keeps their own)
+CLAUDE.md

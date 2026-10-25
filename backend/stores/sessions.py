@@ -19,3 +19,8 @@ class SessionStore:
 
     def history(self, speaker: str) -> list[Session]:
         return [s for s in self._sessions.values() if s.speaker == speaker]
+
+    def save_results(self, session_id: UUID, result: dict) -> None:
+        session = self._sessions[session_id]
+        self._sessions[session_id] = session.model_copy(update={"results": {
+            k: result[k] for k in ("transcript", "metrics", "feedback")}})

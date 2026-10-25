@@ -19,6 +19,7 @@ type Baseline = Record<typeof baselineKeys[number], number>;
 
 /** Pure clock-driven analysis. Timestamps are milliseconds of presented video. */
 export class VisionAnalysis {
+  private readonly onAlert: (event: VisionAlert) => void;
   readonly options: Required<AnalysisOptions>;
   private previousTime: number | null = null;
   private smoothed: Measurements | null = null;
@@ -39,9 +40,10 @@ export class VisionAnalysis {
   private emitted: Partial<Record<AlertValue, number>> = {};
 
   constructor(
-    private readonly onAlert: (event: VisionAlert) => void,
+    onAlert: (event: VisionAlert) => void,
     options: Partial<AnalysisOptions> = {},
   ) {
+    this.onAlert = onAlert;
     this.options = { ...DEFAULT_ANALYSIS, ...options };
     this.pockets = new FrontPocketEntry({ visibility: this.options.pocketVisibility,
       inwardTravel: this.options.pocketInwardTravel, minBaselineSamples: this.options.pocketBaselineSamples });

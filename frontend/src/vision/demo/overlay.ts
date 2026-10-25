@@ -59,11 +59,13 @@ export function drawLandmarks(
 }
 
 export class LandmarkOverlay {
+  private readonly canvas: HTMLCanvasElement;
   private readonly context: CanvasRenderingContext2D;
   private readonly observer: ResizeObserver;
   private latest: LandmarkFrame | null = null;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('The landmark overlay requires a browser with Canvas 2D support.');
     this.context = context;
