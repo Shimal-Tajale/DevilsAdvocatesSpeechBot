@@ -15,3 +15,5 @@ class SessionCreate(BaseModel):
 
 class Session(SessionCreate):
     session_id: UUID
+    # Set by POST /speech: {transcript, metrics, feedback}. None until then.
+    results: dict | None = None

@@ -1,14 +1,18 @@
+import asyncio
 import json
+import logging
 import os
+from uuid import UUID
 
 from deepgram import AsyncDeepgramClient
 from google import genai
 from google.genai import errors, types
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.events import broadcast
+from backend.routes.sessions import get_session_store
 
-# save_session is still a stub until the Postgres side is ready.
+logger = logging.getLogger(__name__)
 
 _deepgram: AsyncDeepgramClient | None = None
 
@@ -85,7 +89,18 @@ RUBRIC = """\
 - clarity: plain words, few fillers (transcript + filler count)
 - delivery: steady pace (~130-160 wpm), purposeful pauses (wpm, pauses)
 - persuasion: claims backed by reasons or examples (transcript)
-- confidence: composite of the measured behaviours above, never a guess"""
+- confidence: composite of the measured behaviours above (including posture and
+  eye contact when vision stats are present), never a guess"""
+
+
+class VisionStats(BaseModel):
+    """What the browser tallies from the vision module's alerts during a speech."""
+    model_config = ConfigDict(extra="forbid")  # a typo'd key should fail loudly
+
+    posture_alerts: int = Field(0, ge=0)
+    hands_alerts: int = Field(0, ge=0)
+    eye_contact_alerts: int = Field(0, ge=0)
+    eye_contact_pct: float | None = Field(None, ge=0, le=100)  # None = not measured
 
 
 class Scores(BaseModel):
@@ -104,10 +119,12 @@ class Feedback(BaseModel):
     robot_line: str
 
 
-def build_prompt(transcript: str, metrics: dict) -> str:
+def build_prompt(transcript: str, metrics: dict, session: dict | None = None) -> str:
+    context = (f"Mode: {session['mode']}. Topic: {session['topic']}.\n\n"
+               if session else "")
     return f"""You are a friendly, honest speech coach. Score this practice speech.
 
-Rubric (score each category 1-10):
+{context}Rubric (score each category 1-10):
 {RUBRIC}
 
 Measured numbers (these are facts; explain them, never contradict or guess them):
@@ -157,8 +174,8 @@ def parse_feedback_json(raw: str) -> dict:
     return Feedback.model_validate_json(raw).model_dump()
 
 
-async def get_feedback(transcript: str, metrics: dict) -> dict:
-    prompt = build_prompt(transcript, metrics)
+async def get_feedback(transcript: str, metrics: dict, session: dict | None = None) -> dict:
+    prompt = build_prompt(transcript, metrics, session)
     if os.getenv("AI_PROVIDER", "gemini") == "muse":
         raise NotImplementedError("Muse provider not wired yet; set AI_PROVIDER=gemini")
     return parse_feedback_json(await call_gemini(prompt))
@@ -168,20 +185,31 @@ class NoSpeechError(ValueError):
     pass
 
 
-async def save_session(result: dict) -> None:
-    pass
+async def save_session(result: dict) -> bool:
+    """False instead of raising: a database outage must not cost the speaker their feedback."""
+    if result["session_id"] is None:
+        return False
+    try:
+        await asyncio.to_thread(get_session_store().save_results,
+                                UUID(result["session_id"]), result)
+        return True
+    except Exception:
+        logger.exception("Saving results failed")
+        return False
 
 
-async def run_session(audio: bytes, vision: dict | None = None) -> dict:
+async def run_session(audio: bytes, vision: VisionStats | None = None,
+                      session: dict | None = None) -> dict:
     await broadcast({"type": "state", "value": "thinking"})
     try:
         transcription = await transcribe(audio)
         if not transcription["words"]:
             raise NoSpeechError("No speech detected in the recording")
         metrics = compute_metrics(transcription)
-        metrics.update(vision or {})
+        if vision:
+            metrics.update(vision.model_dump())
 
-        feedback = await get_feedback(transcription["transcript"], metrics)
+        feedback = await get_feedback(transcription["transcript"], metrics, session)
 
         await broadcast({"type": "metrics", "value": metrics})
         await broadcast({"type": "feedback", "value": feedback})
@@ -190,9 +218,10 @@ async def run_session(audio: bytes, vision: dict | None = None) -> dict:
 
         # TTS of robot_line goes here; until then the browser speaks it.
 
-        result = {"transcript": transcription["transcript"],
+        result = {"session_id": session["session_id"] if session else None,
+                  "transcript": transcription["transcript"],
                   "metrics": metrics, "feedback": feedback}
-        await save_session(result)
+        result["saved"] = await save_session(result)
         return result
     except Exception:
         await broadcast({"type": "lcd", "value": "Try again"})
