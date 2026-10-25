@@ -18,12 +18,52 @@ export interface Measurements {
   torsoHeight: number | null;
   bodyX: number | null;
   shoulderWidth: number | null;
+  /** Legacy diagnostic only; never used to classify behavior. */
   handsLow: number | null;
+  pocketProximity?: number | null;
+  leftWristX?: number | null;
+  leftWristY?: number | null;
+  rightWristX?: number | null;
+  rightWristY?: number | null;
+  shoulderMidX?: number | null;
+  hipMidX?: number | null;
+  torsoOffset?: number | null;
+  torsoLean?: number | null;
+  leftWristHipDistance?: number | null;
+  rightWristHipDistance?: number | null;
+  leftWristInward?: number | null;
+  rightWristInward?: number | null;
+  leftWristAboveHip?: number | null;
+  rightWristAboveHip?: number | null;
+  leftWristHipHorizontal?: number | null;
+  rightWristHipHorizontal?: number | null;
+  leftHandVisibility?: number | null;
+  rightHandVisibility?: number | null;
+  leftWristVisibility?: number | null;
+  rightWristVisibility?: number | null;
+  leftElbowVisibility?: number | null;
+  rightElbowVisibility?: number | null;
+  leftElbowAngle?: number | null;
+  rightElbowAngle?: number | null;
+  leftElbowOutward?: number | null;
+  rightElbowOutward?: number | null;
+  leftFrontPocketRegion?: number | null;
+  rightFrontPocketRegion?: number | null;
+  leftPocketRegion?: number | null;
+  rightPocketRegion?: number | null;
+  trackingVisibility?: number | null;
   headYaw: number | null;
   headPitch: number | null;
 }
 
 export interface AnalysisOptions {
+  torsoDropAbsolute?: number;
+  swayReversals?: number;
+  wristExcursion?: number;
+  wristReversals?: number;
+  pocketVisibility?: number;
+  pocketInwardTravel?: number;
+  pocketBaselineSamples?: number;
   calibrationMs: number;
   sustainedMs: number;
   cooldownMs: number;
@@ -46,9 +86,23 @@ export interface AnalysisStatus {
   measurements: Measurements;
   conditions: Record<AlertValue, boolean>;
   calibrationBlockers: CalibrationBlocker[];
+  behaviors?: { slouching: boolean; possiblePockets: boolean; fidgeting: boolean; swaying: boolean };
+  diagnostics?: { neckDrop: number | null; torsoDrop: number | null; pocketStillMs: number;
+    wristReversals: number; torsoReversals: number; motionConfidence: number };
+  debug?: {
+    wristEvidence?: Record<'left' | 'right', import('./wrist-motion.js').WristMotionEvidence>;
+    pocketHands?: Record<'left' | 'right', import('./front-pockets.js').PocketHandStatus>;
+    raw: Measurements; baseline: Record<string, number> | null; thresholds: Record<string, number>;
+    frameGapMs: number; historyMs: number; historySamples: number; historyReset: string;
+    motionChannels: { axis: string; amplitude: number; reversals: number; reason: string }[];
+    swayAmplitude: number; relativeSwayAmplitude: number; wristAmplitude: number;
+    detectors: Record<string, { state: 'Clear' | 'Detected' | 'Uncertain' | 'Calibrating'; reason: string; activeMs: number }>;
+    cooldownRemainingMs: Record<AlertValue, number>;
+    torsoHistory: { time: number; translation: number; relative: number | null }[];
+  };
 }
 
-export type CalibrationBlocker = 'neck' | 'torso' | 'face' | 'frame_gap';
+export type CalibrationBlocker = 'neck' | 'torso' | 'face' | 'frame_gap' | 'unstable';
 
 /** Normalized, unmirrored landmarks from the same inference used for analysis.
  * Treat arrays as read-only. Called synchronously once per processed frame.
