@@ -65,9 +65,13 @@ const emptyTally = (): Tally => ({
 
 type Behaviors = NonNullable<AnalysisStatus['behaviors']>
 
-// The module's alerts only say posture/hands; its status (sent just before each
-// alert) says which behaviour is active.
-function detailFor(value: AlertValue, b: Behaviors | undefined): AlertDetail | undefined {
+// The module's alerts only say posture/hands; its status (sent just before the
+// frame's alerts) says which behaviour each one came from. The behaviours active at
+// that moment are a fallback for statuses without that field.
+function detailFor(value: AlertValue, status: AnalysisStatus | undefined): AlertDetail | undefined {
+  const fired = status?.alertBehaviors?.[value]
+  if (fired === 'slouch' || fired === 'sway' || fired === 'pockets' || fired === 'fidget') return fired
+  const b: Behaviors | undefined = status?.behaviors
   if (!b) return undefined
   if (value === 'posture') return b.swaying && !b.slouching ? 'sway' : 'slouch'
   if (value === 'hands') return b.possiblePockets ? 'pockets' : 'fidget'
@@ -108,7 +112,7 @@ export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => 
   const counting = useRef(false) // recording, not paused
   const calibrated = useRef(false)
   const tally = useRef<Tally>(emptyTally())
-  const behaviors = useRef<Behaviors | undefined>(undefined)
+  const latestStatus = useRef<AnalysisStatus | undefined>(undefined)
   const [mode, setMode] = useState<'camera' | 'replay' | null>(null)
   const [clip, setClip] = useState<Clip | null>(null)
   const clipRecorder = useRef<MediaRecorder | null>(null)
@@ -149,7 +153,7 @@ export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => 
 
     handlers.alert = (value) => {
       if (!counting.current) return
-      const detail = detailFor(value, behaviors.current)
+      const detail = detailFor(value, latestStatus.current)
       tally.current[value] += 1
       if (detail) tally.current[detail] += 1
       setLastAlert({ value, detail })
@@ -167,7 +171,7 @@ export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => 
     }
     handlers.status = (status) => {
       if (!active.current) return
-      behaviors.current = status.behaviors
+      latestStatus.current = status
       if (performance.now() - lastDisplay.current >= 150) {
         lastDisplay.current = performance.now()
         setStatus(status)

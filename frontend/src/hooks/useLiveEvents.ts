@@ -16,7 +16,8 @@ export function useLiveEvents() {
   const [handRaised, setHandRaised] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])
   const connection = useRef<EventsConnection | null>(null)
-  const lastShown = useRef<Partial<Record<AlertValue, number>>>({})
+  // Keyed by behaviour when known (slouch, sway, ...), so one doesn't hide another.
+  const lastShown = useRef<Partial<Record<string, number>>>({})
   const nextId = useRef(0)
 
   useEffect(() => {
@@ -24,9 +25,10 @@ export function useLiveEvents() {
 
     const showToast = (kind: AlertValue, detail?: AlertDetail) => {
       const now = Date.now()
-      const last = lastShown.current[kind]
-      if (last !== undefined && now - last < TOAST_COOLDOWN_MS) return // one per kind per 12 s
-      lastShown.current[kind] = now
+      const key = detail ?? kind
+      const last = lastShown.current[key]
+      if (last !== undefined && now - last < TOAST_COOLDOWN_MS) return // one per behaviour per 12 s
+      lastShown.current[key] = now
       const id = nextId.current++
       setToasts((current) => [...current, { id, kind, detail }])
       const timer = setTimeout(() => {
