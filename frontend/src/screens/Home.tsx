@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { AlertToaster } from '@/components/AlertToaster'
 import { ComingSoonBadge } from '@/components/ComingSoonBadge'
-import { DevMoodSwitcher } from '@/components/DevMoodSwitcher'
 import { Mascot } from '@/components/Mascot'
 import { ModeCard } from '@/components/ModeCard'
 import { PermissionPrompt, type PermissionState } from '@/components/PermissionPrompt'
@@ -36,15 +35,14 @@ const PERMISSION_MOOD: Record<PermissionState, Mood> = {
 export default function Home() {
   const [permission, setPermission] = useState<PermissionState>('idle')
   const [hoveringCard, setHoveringCard] = useState(false)
-  const [override, setOverride] = useState<Mood | null>(null)
 
   const [speaker, setSpeaker] = useSpeaker()
   const { state, handRaised, toasts, send, dismissToast } = useLiveEvents()
 
-  // Dev override, then live events (state maps straight to a mood, hand: raise to handRaised),
-  // then the frontend-only reactions to hovering and the permission prompt.
+  // Live events (state maps straight to a mood, hand: raise to handRaised), then the
+  // frontend-only reactions to hovering and the permission prompt.
   const derived: Mood = hoveringCard ? 'listening' : PERMISSION_MOOD[permission]
-  const mood = override ?? liveMood(state, handRaised) ?? derived
+  const mood = liveMood(state, handRaised) ?? derived
   const takeQuestion = () => send({ type: 'hand', value: 'lower' })
 
   return (
@@ -114,7 +112,6 @@ export default function Home() {
         <PermissionPrompt onChange={setPermission} />
       </main>
       <AlertToaster toasts={toasts} onDismiss={dismissToast} />
-      <DevMoodSwitcher value={override} onChange={setOverride} />
     </div>
   )
 }
