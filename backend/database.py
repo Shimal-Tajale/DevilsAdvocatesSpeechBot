@@ -45,8 +45,6 @@ CREATE TABLE IF NOT EXISTS feedback (
     robot_line text NOT NULL,
     transcript text NOT NULL
 );
--- RUBRIC.md's per-criterion scores; added later, so older rows have none.
-ALTER TABLE feedback ADD COLUMN IF NOT EXISTS criteria jsonb;
 """
 
 # One query rebuilds a session with its results (results is NULL until /speech runs).
@@ -58,7 +56,7 @@ SELECT s.id, s.speaker, s.mode, s.topic,
            'feedback', jsonb_build_object(
                'scores', f.scores, 'overall', s.overall_score,
                'strengths', f.strengths, 'fixes', f.fixes,
-               'robot_line', f.robot_line, 'criteria', f.criteria))
+               'robot_line', f.robot_line))
        END AS results
 FROM sessions s
 LEFT JOIN metrics m ON m.session_id = s.id
@@ -137,15 +135,14 @@ class PostgresSessionStore:
                  m.get("eye_contact_pct"), m.get("posture_alerts"), Jsonb(m)))
             conn.execute(
                 """INSERT INTO feedback (session_id, scores, strengths, fixes,
-                                         robot_line, transcript, criteria)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                         robot_line, transcript)
+                   VALUES (%s, %s, %s, %s, %s, %s)
                    ON CONFLICT (session_id) DO UPDATE SET
                        scores = EXCLUDED.scores, strengths = EXCLUDED.strengths,
                        fixes = EXCLUDED.fixes, robot_line = EXCLUDED.robot_line,
-                       transcript = EXCLUDED.transcript, criteria = EXCLUDED.criteria""",
+                       transcript = EXCLUDED.transcript""",
                 (session_id, Jsonb(f["scores"]), Jsonb(f["strengths"]), Jsonb(f["fixes"]),
-                 f["robot_line"], result["transcript"],
-                 Jsonb(f["criteria"]) if f.get("criteria") is not None else None))
+                 f["robot_line"], result["transcript"]))
 
 
 def create_store() -> SessionStore | PostgresSessionStore:

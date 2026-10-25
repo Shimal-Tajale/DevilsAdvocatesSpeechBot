@@ -41,8 +41,7 @@ async def events_ws(ws: WebSocket):
 @app.post("/speech")
 async def speech(audio: UploadFile = File(...),
                  session_id: UUID | None = Form(None),
-                 vision: str | None = Form(None, description="VisionStats as a JSON string"),
-                 target_length_sec: int | None = Form(None, gt=0, le=3 * 60 * 60)):
+                 vision: str | None = Form(None, description="VisionStats as a JSON string")):
     session = None
     if session_id:
         # Blocking DB call: keep it off the event loop so /events stays live.
@@ -59,7 +58,7 @@ async def speech(audio: UploadFile = File(...),
     if not data:
         raise HTTPException(status_code=400, detail="Empty audio file")
     try:
-        return await run_session(data, stats, session, target_length_sec)
+        return await run_session(data, stats, session)
     except NoSpeechError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:

@@ -101,94 +101,24 @@ def compute_metrics(transcription: dict) -> dict:
     real_words = sum(1 for w in words if w["word"].lower() not in FILLER_SOUNDS)
     gaps = [b["start"] - a["end"] for a, b in zip(words, words[1:])]
 
-    hedge_list = find_hedges(transcription["transcript"])
     return {
         "wpm": round(real_words / speaking_time * 60) if speaking_time > 0 else 0,
         "fillers": len(filler_list),
         "filler_list": filler_list,
-        "hedge_count": len(hedge_list),
-        "hedge_list": hedge_list,
         "pauses": sum(1 for g in gaps if g > PAUSE_SECONDS),
         "longest_pause": round(max(gaps, default=0.0), 1),
         "speaking_time": round(speaking_time, 1),
     }
 
 
-# RUBRIC.md: hedges such as "I think maybe" or "sort of".
-HEDGES = ["i think", "i guess", "i feel like", "i suppose", "maybe", "perhaps", "probably",
-          "possibly", "sort of", "kind of"]
-_HEDGE_RE = re.compile(r"\b(" + "|".join(re.escape(h) for h in HEDGES) + r")\b")
-
-
-def find_hedges(transcript: str) -> list[str]:
-    return _HEDGE_RE.findall(re.sub(r"[^\w\s']", " ", transcript.lower()))
-
-
-# ---- scoring (RUBRIC.md): code scores what it measured, Gemini what it judges ----
-
-CRITERION_CATEGORY = {
-    "filler_words": "clarity", "confident_language": "clarity", "relevance": "clarity",
-    "pace": "delivery", "pauses": "delivery",
-    "structure": "structure", "timing": "structure",
-    "eye_contact": "body_language", "posture": "body_language",
-    "evidence": "persuasion",
-}
-JUDGED = ("relevance", "structure", "evidence")  # vocal_variety and script_coverage: not built
-
-# Overall-score weights per mode, in percent (RUBRIC.md).
-WEIGHTS = {
-    "presentation": {"structure": 25, "clarity": 20, "delivery": 25, "body_language": 15, "persuasion": 15},
-    "debate":       {"structure": 20, "clarity": 20, "delivery": 15, "body_language": 15, "persuasion": 30},
-    "interview":    {"structure": 30, "clarity": 25, "delivery": 20, "body_language": 15, "persuasion": 10},
-}
-
-
-def _band(value: float, limits: tuple, scores=(10, 8, 6, 4, 2), floor: int = 1) -> int:
-    """The score of the first column the value fits (value <= limit), else floor."""
-    return next((s for limit, s in zip(limits, scores) if value <= limit), floor)
-
-
-def _plural(n: int, word: str) -> str:
-    return f"{n} {word}{'' if n == 1 else 's'}"
-
-
-def _clock(seconds: float) -> str:
-    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
-
-
-def measured_criteria(m: dict) -> list[dict]:
-    """Score the measured criteria with RUBRIC.md's tables. A criterion whose input is
-    missing (no camera, no target length) is left out, as the rubric says."""
-    minutes = max(m["speaking_time"], 30) / 60  # under 30 s, per-minute rates would explode
-    out = []
-
-    def add(cid: str, score: int, detail: str):
-        out.append({"id": cid, "category": CRITERION_CATEGORY[cid], "score": score, "detail": detail})
-
-    fpm, hpm = m["fillers"] / minutes, m["hedge_count"] / minutes
-    add("filler_words", _band(fpm, (1, 2, 4, 6, 8)), f"{_plural(m['fillers'], 'filler')} ({fpm:.1f} per minute)")
-    add("confident_language", _band(hpm, (1, 2, 4, 6, 8)), f"{_plural(m['hedge_count'], 'hedge')} ({hpm:.1f} per minute)")
-
-    wpm = m["wpm"]
-    pace = next((s for lo, hi, s in [(130, 160, 10), (120, 175, 8), (110, 190, 6), (100, 205, 4), (90, 220, 2)]
-                 if lo <= wpm <= hi), 1)
-    add("pace", pace, f"{wpm} words per minute")
-    add("pauses", _band(m["pauses"], (0, 1, 2, 3, 4)),
-        f"{_plural(m['pauses'], 'pause')} over 2 s, longest {m['longest_pause']} s")
-
-    if m.get("target_length_sec"):
-        target = m["target_length_sec"]
-        gap = abs(m["speaking_time"] - target) / target
-        add("timing", _band(gap, (.10, .20, .35, .50), (10, 8, 6, 4), floor=2),
-            f"{_clock(m['speaking_time'])} of a {_clock(target)} target")
-    if isinstance(m.get("eye_contact_pct"), (int, float)):
-        pct = m["eye_contact_pct"]
-        add("eye_contact", _band(-pct, (-70, -60, -50, -35), (10, 8, 6, 4), floor=2),
-            f"{round(pct)}% of the time facing the camera")
-    if "posture_alerts" in m:
-        alerts = m["posture_alerts"] + m.get("hands_alerts", 0)  # hands feed posture (RUBRIC.md)
-        add("posture", _band(alerts, (0, 1, 2, 3), (10, 8, 6, 4), floor=2), _plural(alerts, "posture alert"))
-    return out
+# Draft rubric from the design doc; Abhiram's final version replaces this.
+RUBRIC = """\
+- structure: clear hook, main points and conclusion (from the transcript)
+- clarity: plain words, few fillers (transcript + filler count)
+- delivery: steady pace (~130-160 wpm), purposeful pauses (wpm, pauses)
+- persuasion: claims backed by reasons or examples (transcript)
+- confidence: composite of the measured behaviours above (including posture and
+  eye contact when vision stats are present), never a guess"""
 
 
 class VisionStats(BaseModel):
@@ -206,100 +136,41 @@ class VisionStats(BaseModel):
     fidget_alerts: int | None = Field(None, ge=0)
 
 
-class JudgedScore(BaseModel):
-    id: str      # relevance | structure | evidence
-    score: int   # 0-10
-    detail: str  # one sentence quoting or pointing to the transcript
-    tip: str
+class Scores(BaseModel):
+    structure: int
+    clarity: int
+    delivery: int
+    persuasion: int
+    confidence: int
 
 
-class CriterionTip(BaseModel):
-    id: str
-    tip: str
-
-
-class CoachReply(BaseModel):
-    """What Gemini returns; scores and the overall come from code (RUBRIC.md)."""
-    judged: list[JudgedScore]
-    tips: list[CriterionTip]
+class Feedback(BaseModel):
+    scores: Scores
+    overall: int
     strengths: list[str]
     fixes: list[str]
     robot_line: str
 
 
-# RUBRIC.md anchors for the judged criteria (10 / 7 / 4 / 1).
-ANCHORS = """\
-- relevance: 10 every section serves the stated topic; 7 mostly on topic with one tangent;
-  4 several tangents, topic unclear at times; 1 mostly unrelated to the topic.
-- structure: 10 hook, clear main points and a conclusion that lands; 7 all three parts
-  present, one weak; 4 a part is missing or the points blur; 1 no discernible order.
-- evidence: 10 every claim has a reason, example or number; 7 most claims supported, one
-  only asserted; 4 mostly assertions with a few examples; 1 no support offered."""
+def build_prompt(transcript: str, metrics: dict, session: dict | None = None) -> str:
+    context = (f"Mode: {session['mode']}. Topic: {session['topic']}.\n\n"
+               if session else "")
+    return f"""You are a friendly, honest speech coach. Score this practice speech.
 
-MODE_RULES = {
-    "debate": "Debate mode: judge evidence by how well the claims answer the opposing side.",
-    "interview": "Interview mode: judge structure against STAR (Situation, Task, Action, Result) "
-                 "and name the missing parts in its detail.",
-}
+{context}Rubric (score each category 1-10):
+{RUBRIC}
 
-
-def build_prompt(transcript: str, measured: list[dict], session: dict | None = None) -> str:
-    context = f"Mode: {session['mode']}. Topic: {session['topic']}.\n" if session else ""
-    scored = "\n".join(f"- {c['id']}: {c['score']}/10 ({c['detail']})" for c in measured)
-    return f"""You are a friendly, honest speech coach. {context}
-These criteria were measured and scored by code. They are facts: explain them, never
-re-score or contradict them:
-{scored}
-
-Score these three yourself, 0-10, using the anchors (scores between anchors are fine):
-{ANCHORS}
-{MODE_RULES.get((session or {}).get('mode'), '')}
+Measured numbers (these are facts; explain them, never contradict or guess them):
+{json.dumps(metrics, indent=2)}
 
 Transcript:
 \"\"\"{transcript}\"\"\"
 
-Return JSON only:
-- judged: relevance, structure and evidence, each with a score, a detail sentence that
-  quotes or points to a specific moment in the transcript, and one concrete tip.
-- tips: one concrete tip for each measured criterion above, by id.
-- strengths: exactly one, specific. fixes: at most three, from the lowest-scoring criterion
-  up, each quoting or pointing to a moment in the transcript.
-- robot_line: spoken aloud by a robot; one friendly sentence under 20 words.
-- Never say you detect confidence or emotion."""
-
-
-def assemble_feedback(measured: list[dict], reply: CoachReply, mode: str | None) -> dict:
-    """Criteria list, category scores, confidence composite and the weighted overall,
-    all computed in code from RUBRIC.md."""
-    tips = {t.id: t.tip for t in reply.tips}
-    criteria = [{**c, "tip": tips.get(c["id"], "")} for c in measured]
-    for j in reply.judged:
-        if j.id in JUDGED and all(c["id"] != j.id for c in criteria):
-            criteria.append({"id": j.id, "category": CRITERION_CATEGORY[j.id],
-                             "score": max(0, min(10, j.score)), "detail": j.detail, "tip": j.tip})
-
-    exact: dict[str, float] = {}  # unrounded category averages, for the overall
-    for category in WEIGHTS["presentation"]:
-        values = [c["score"] for c in criteria if c["category"] == category]
-        if values:
-            exact[category] = sum(values) / len(values)
-
-    # Confidence: composite of measured behaviour, never "AI detects confidence".
-    confident_language = next((c["score"] for c in criteria if c["id"] == "confident_language"), None)
-    parts = [v for v in (exact.get("delivery"), exact.get("body_language"), confident_language) if v is not None]
-
-    scores = {k: round(v) for k, v in exact.items()}
-    for required in ("structure", "clarity", "delivery", "persuasion"):
-        if required not in scores:  # only if Gemini skipped a judged criterion
-            logger.warning("No score for %s; showing 5", required)
-            scores[required] = 5
-    scores["confidence"] = round(sum(parts) / len(parts)) if parts else scores["delivery"]
-
-    weights = WEIGHTS.get(mode or "", WEIGHTS["presentation"])
-    total = sum(weights[c] for c in exact)
-    overall = round(10 * sum(weights[c] * v for c, v in exact.items()) / total) if total else 50
-    return {"scores": scores, "overall": overall, "strengths": reply.strengths,
-            "fixes": reply.fixes[:3], "robot_line": reply.robot_line, "criteria": criteria}
+Rules:
+- overall is 0-100.
+- 1-3 strengths, 2-3 fixes. Every fix quotes or points to a specific moment in the transcript.
+- robot_line is spoken aloud by a robot: one short, friendly sentence, under 15 words.
+- Return JSON only."""
 
 
 _gemini: genai.Client | None = None
@@ -317,7 +188,7 @@ def _gemini_client() -> genai.Client:
 GEMINI_MODELS = "gemini-3.5-flash-lite,gemini-3.8-flash,gemini-2.5-flash"
 
 
-async def call_gemini(prompt: str, schema: type[BaseModel]) -> str:
+async def call_gemini(prompt: str, schema: type[BaseModel] = Feedback) -> str:
     models = os.getenv("GEMINI_MODELS", GEMINI_MODELS).split(",")
     for model in models:
         try:
@@ -332,13 +203,15 @@ async def call_gemini(prompt: str, schema: type[BaseModel]) -> str:
                 raise
 
 
+def parse_feedback_json(raw: str) -> dict:
+    return Feedback.model_validate_json(raw).model_dump()
+
+
 async def get_feedback(transcript: str, metrics: dict, session: dict | None = None) -> dict:
-    measured = measured_criteria(metrics)
-    prompt = build_prompt(transcript, measured, session)
+    prompt = build_prompt(transcript, metrics, session)
     if os.getenv("AI_PROVIDER", "gemini") == "muse":
         raise NotImplementedError("Muse provider not wired yet; set AI_PROVIDER=gemini")
-    reply = CoachReply.model_validate_json(await call_gemini(prompt, CoachReply))
-    return assemble_feedback(measured, reply, (session or {}).get("mode"))
+    return parse_feedback_json(await call_gemini(prompt))
 
 
 # ---- audience question (after the speech; one web search per question) ----
@@ -594,7 +467,7 @@ async def save_session(result: dict) -> bool:
 
 
 async def run_session(audio: bytes, vision: VisionStats | None = None,
-                      session: dict | None = None, target_length_sec: int | None = None) -> dict:
+                      session: dict | None = None) -> dict:
     await broadcast({"type": "state", "value": "thinking"})
     handed_off = False  # True once idle_after() owns going back to idle
     try:
@@ -604,8 +477,6 @@ async def run_session(audio: bytes, vision: VisionStats | None = None,
         metrics = compute_metrics(transcription)
         if vision:
             metrics.update(vision.model_dump(exclude_none=True))
-        if target_length_sec:
-            metrics["target_length_sec"] = target_length_sec  # enables the timing criterion
 
         feedback = await get_feedback(transcription["transcript"], metrics, session)
 
