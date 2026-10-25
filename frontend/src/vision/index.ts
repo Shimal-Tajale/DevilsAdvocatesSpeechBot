@@ -5,3 +5,5 @@ export type {
   AlertValue, VisionAlert, Landmark, Measurements, AnalysisOptions,
   AnalysisStatus, CalibrationBlocker, LandmarkFrame, VisionOptions, VisionController,
 } from './types.js';
+
+export { SENSITIVE_ANALYSIS } from './sensitivity.js';

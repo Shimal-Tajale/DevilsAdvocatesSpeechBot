@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, mock, test } from 'node:test';
 import { FaceLandmarker, FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { initializeVision } from '../controller.js';
-import type { LandmarkFrame, VisionController, VisionOptions } from '../types.js';
+import type { Landmark, LandmarkFrame, VisionController, VisionOptions } from '../types.js';
 
 class FakeVideo extends EventTarget {
   paused = false;
@@ -20,8 +20,8 @@ let nextId: number;
 let controller: VisionController | undefined;
 const rafDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame');
 const cancelDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'cancelAnimationFrame');
-const poseDetect = mock.fn(() => ({ landmarks: [] }));
-const faceDetect = mock.fn(() => ({ faceLandmarks: [] }));
+const poseDetect = mock.fn((): { landmarks: Landmark[][] } => ({ landmarks: [] }));
+const faceDetect = mock.fn((): { faceLandmarks: Landmark[][] } => ({ faceLandmarks: [] }));
 const poseClose = mock.fn();
 const faceClose = mock.fn();
 
@@ -163,4 +163,28 @@ test('landmark callback reuses existing detections with frame dimensions and tim
   controller.stop();
   frame(200);
   assert.equal(frames.length, 2);
+});
+
+
+test('current detection status reaches the display before its emitted alert', async () => {
+  const p = (x: number, y: number): Landmark => ({ x, y, z: 0, visibility: 1 });
+  const pose: Landmark[] = [];
+  pose[11] = p(0.4, 0.4); pose[12] = p(0.6, 0.4);
+  pose[7] = p(0.45, 0.3); pose[8] = p(0.55, 0.3);
+  pose[23] = p(0.45, 0.7); pose[24] = p(0.55, 0.7);
+  const face: Landmark[] = [];
+  face[33] = p(0.4, 0.3); face[263] = p(0.6, 0.3); face[1] = p(0.5, 0.4);
+  poseDetect.mock.mockImplementation(() => ({ landmarks: [pose] }));
+  faceDetect.mock.mockImplementation(() => ({ faceLandmarks: [face] }));
+  let latestSlouch = false, count = 0;
+  controller = await initializeVision({ ...options(), analysis: { calibrationMs: 300, sustainedMs: 200, smoothingMs: 1 },
+    onStatus: status => { latestSlouch = status.behaviors?.slouching ?? false; },
+    onAlert: () => { assert.equal(latestSlouch, true); count++; },
+  });
+  const video = new FakeVideo(); controller.start(video.element);
+  for (let time = 0; time <= 800; time += 100) {
+    if (time === 400) { pose[11].y = 0.47; pose[12].y = 0.47; }
+    video.currentTime = time / 1000; frame(time);
+  }
+  assert.equal(count, 1);
 });

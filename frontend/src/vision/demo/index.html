@@ -30,6 +30,12 @@
           </div>
           <p>Mirrored preview · one speaker · no audio requested</p>
           <p class="hint">Green: pose skeleton · white: confident pose points · amber: low visibility · blue: face outline</p>
+          <label for="sensitivity">Detection sensitivity</label>
+          <select id="sensitivity">
+            <option value="sensitive" selected>Sensitive — smaller/slower movements</option>
+            <option value="conservative">Conservative — previous thresholds</option>
+          </select>
+          <p class="hint">Stop the camera to change sensitivity, then start and recalibrate. Sensitive mode may increase false alerts; sustained timing and missing-wrist safeguards still apply.</p>
           <div class="controls">
             <button id="start" type="button" disabled>Start Camera</button>
             <button id="stop" type="button" disabled>Stop Camera</button>
@@ -57,6 +63,14 @@
             <div><dt>Head orientation</dt><dd id="eye_contact">Waiting for camera</dd></div>
           </dl>
           <p id="head-measurements" class="hint">Head orientation is a proxy, not eye tracking.</p>
+          <details open>
+            <summary>Live detector diagnostics and explanations</summary>
+            <p class="hint">Torso history: green = whole-body translation from window start; amber = shoulders relative to hips. Auto-scaled, in shoulder widths.</p>
+            <canvas id="torso-history" width="600" height="160" aria-label="Rolling torso movement history"></canvas>
+            <button id="export-trace" type="button" disabled>Download diagnostic trace</button>
+            <p class="hint">Last 900 processed frames of numeric diagnostics only; kept locally. No camera images or audio.</p>
+            <pre id="analysis-diagnostics">Waiting for processed frames.</pre>
+          </details>
           <h2>Emitted alerts</h2>
           <p id="no-alerts">No alerts yet.</p>
           <ol id="alerts" aria-label="Recent emitted alerts" aria-live="polite"></ol>

@@ -7,7 +7,10 @@ import type { VisionController, VisionOptions } from './types.js';
 export async function initializeVision(options: VisionOptions): Promise<VisionController> {
   const maxFps = options.maxFps ?? 15;
   if (!Number.isFinite(maxFps) || maxFps <= 0) throw new Error('maxFps must be positive');
-  const analysis = new VisionAnalysis(options.onAlert, options.analysis);
+  // Deliver current status before its alerts so consumers never label alerts
+  // with the previous frame's detector state.
+  const pendingAlerts: Parameters<VisionOptions['onAlert']>[0][] = [];
+  const analysis = new VisionAnalysis(event => pendingAlerts.push(event), options.analysis);
   const files = await FilesetResolver.forVisionTasks(options.wasmRoot);
   const pose = await PoseLandmarker.createFromOptions(files, {
     baseOptions: { modelAssetPath: options.poseModelPath, delegate: options.delegate ?? 'CPU' },
@@ -80,9 +83,10 @@ export async function initializeVision(options: VisionOptions): Promise<VisionCo
         });
         const status = analysis.update(measure(
           poseResult.landmarks[0], faceResult.faceLandmarks[0],
-          input.videoWidth / input.videoHeight,
+          input.videoWidth / input.videoHeight, analysis.options.pocketVisibility,
         ), input.currentTime * 1000);
         options.onStatus?.(status);
+        for (const event of pendingAlerts.splice(0)) options.onAlert(event);
       }
     } catch (error) {
       stop();
