@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from uuid import UUID
 
 from deepgram import AsyncDeepgramClient
@@ -25,10 +26,35 @@ def _deepgram_client() -> AsyncDeepgramClient:
     return _deepgram
 
 
-async def transcribe(audio: bytes) -> dict:
+# Too common to be worth boosting; boosting them makes Deepgram hear them where
+# they weren't said.
+COMMON_WORDS = {"the", "and", "for", "but", "with", "about", "from", "that", "this",
+                "why", "how", "what", "when", "who", "your", "you", "our", "are", "was",
+                "should", "can", "will", "not", "all", "everyone", "into", "its"}
+
+
+def vocabulary(session: dict | None) -> list[str]:
+    """Deepgram keywords ("word:boost") so names and jargon are spelled right.
+
+    Deepgram can't be limited to a word list, only nudged toward words. The
+    speaker's name is boosted most; DEEPGRAM_KEYWORDS in .env (comma-separated)
+    adds fixed ones such as team names."""
+    def words(text: str) -> list[str]:
+        # 3+ letters: short words ("us", "at") are never the ones misheard.
+        return [w for w in re.findall(r"[A-Za-z][\w'-]{2,}", text) if w.lower() not in COMMON_WORDS]
+
+    boosted = [f"{w.strip()}:2" for w in os.getenv("DEEPGRAM_KEYWORDS", "").split(",") if w.strip()]
+    if session:
+        boosted += [f"{w}:2" for w in words(session["speaker"])]
+        boosted += [f"{w}:1" for w in words(session["topic"])]
+    return list(dict.fromkeys(boosted))[:50]  # dedupe; keep the request small
+
+
+async def transcribe(audio: bytes, keywords: list[str] | None = None) -> dict:
     # nova-2, not nova-3: nova-3 silently drops um/uh even with filler_words=True.
     response = await _deepgram_client().listen.v1.media.transcribe_file(
-        request=audio, model="nova-2", smart_format=True, filler_words=True)
+        request=audio, model="nova-2", smart_format=True, filler_words=True,
+        keywords=keywords or None)
     alt = response.results.channels[0].alternatives[0]
     return {
         "transcript": alt.transcript,
@@ -202,7 +228,7 @@ async def run_session(audio: bytes, vision: VisionStats | None = None,
                       session: dict | None = None) -> dict:
     await broadcast({"type": "state", "value": "thinking"})
     try:
-        transcription = await transcribe(audio)
+        transcription = await transcribe(audio, vocabulary(session))
         if not transcription["words"]:
             raise NoSpeechError("No speech detected in the recording")
         metrics = compute_metrics(transcription)

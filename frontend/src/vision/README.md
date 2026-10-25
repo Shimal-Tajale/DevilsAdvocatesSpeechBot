@@ -177,3 +177,140 @@ regression test now covers this case.
 They do not load WASM/models or establish real-camera accuracy. Browser smoke tests
 remain necessary: check calibration, occlusion, pause/resume, seek/loop, cleanup,
 webcam/replay input, and CPU/GPU behavior on the target device.
+
+
+### Diagnostic demo and webcam limits
+
+See [the pipeline audit](PIPELINE_AUDIT.md) for findings and the validation procedure.
+The demo shows raw/smoothed inputs, baselines, thresholds, window/reset diagnostics,
+per-detector explanations, candidate durations and category cooldowns. Download
+diagnostic trace saves the last 900 numeric samples locally, without images/audio.
+
+Calibrate upright and still with the head to slightly below the hips in view.
+Missing required landmarks, long gaps and changing posture restart calibration.
+A stable bad starting posture cannot be identified automatically. Recalibrate
+when changing the camera position or framing.
+
+Slouch candidates require torso compression relative to baseline; head drop alone
+never triggers posture. Frontal spinal curvature can remain unobservable. Visible torso geometry near
+the saved upright baseline now displays “Upright relative to baseline”; missing
+torso geometry remains untracked. This is not proof of spinal alignment. Sway considers shoulder motion
+relative to hips and whole-body translation. Wrists use torso-relative coordinates
+and 60ms smoothing instead of posture's 250ms smoothing. The motion window honors
+`swayWindowMs`. Reversal counting starts with observed extrema; count hysteresis
+prevents boundary flicker and recent motion is required. Brief adjustments and
+large gestures are excluded. Repeated small gestures can still resemble fidgeting.
+
+Front-pants-pocket detection now requires a temporal entry from independently
+calibrated side-resting wrists. Each hand exposes its baseline, inward travel,
+projected elbow angle/outward position, visibility, state and heuristic evidence
+score. The required inward travel is the larger of an inspectable safety floor
+and four times the actual calibration noise. Static hip proximity is insufficient.
+
+After observed entry, a wrist must hold the region for one second; both hands must
+qualify before the existing sustained-alert delay emits the `hands` event labeled
+“Possible hands in front pockets” in the demo. Elbow bending/outward position
+supports the inference. Occlusion is retained only after an observed supported
+entry, for at most four seconds after the last valid observation. Arbitrary missing
+wrists, lost torso tracking, pauses and exits clear evidence. One-hand entry remains
+visible diagnostically but does not trigger the both-hands message.
+
+No real webcam trace was supplied for this change. Calibration noise and relative
+positions come from live measurements, but geometric safety bounds and timing
+remain provisional heuristics. Inspect/download the diagnostic trace while moving
+from sides into front pockets before empirically tuning thresholds. Projected elbow
+angles are supporting 2D evidence and cannot confirm clothing contact.
+
+Alert JSON remains unchanged (`posture`, `hands`, `eye_contact`). Optional status
+fields carry specific behavior names and diagnostics. Live candidates are separate
+from sustained emitted alerts and cooldowns. Automated tests do not establish
+webcam accuracy; inspect actual measurements in the diagnostic demo.
+
+
+### Sensitive demo preset
+
+The demo now starts in **Sensitive** mode. Stop the camera to select the previous
+**Conservative** gates, then restart and recalibrate. Library defaults remain
+conservative; callers can pass the exported `SENSITIVE_ANALYSIS` as `analysis`.
+New numeric analysis options are optional, preserving existing caller objects.
+
+| Gate | Conservative | Sensitive |
+| --- | --- | --- |
+| Torso height drop from baseline | 12% plus 0.12 shoulder widths | 6% plus 0.06 shoulder widths |
+| Sway excursion | 0.45 shoulder widths | 0.20 shoulder widths |
+| Sway entry reversals | 6 | 3 |
+| Wrist excursion | 0.18 shoulder widths | 0.10 shoulder widths |
+| Wrist entry reversals | 10 | 6 |
+| Pocket wrist/core visibility | 0.75 | 0.55 |
+| Pocket inward-travel floor | 0.08 shoulder widths | 0.05 shoulder widths |
+| Wrist baseline samples | 5 | 3 |
+
+Both presets retain a six-second rolling window, two-second alert delay, cooldowns,
+noise-relative pocket travel, both-hand temporal entry and limited supported
+occlusion memory. Head drop alone, arbitrary missing wrists and one-time body
+shifts remain excluded. The measurement and temporal detector receive the same
+pocket visibility setting; lowering only the final classifier would leave an
+upstream gate blocking evidence. Diagnostics show the active settings and exports
+retain them. Visible normal geometry is described separately from an incomplete
+pocket baseline.
+
+This is a deliberate sensitivity experiment prompted by reported misses, not an
+empirically fitted update. More false positives are possible. Generated time-series
+tests verify smaller signals reach the detector and key exclusions remain; actual
+webcam traces are still needed to evaluate accuracy.
+
+
+### Pocket/sway regression update
+
+Fidgeting now has its own 0.80 visibility gate, independent of Sensitive mode's
+relaxed pocket gate. Browser measurements include the minimum visibility of each
+wrist and its index/pinky/thumb pose points; missing or low-confidence hand points
+exclude that hand from fidgeting. Direct measurement callers without hand-tip
+metadata still need explicit current wrist visibility. Hip-relative wrist motion
+removes shoulders swaying over hands fixed at the hips. Each hand's pocket-region
+or active entry evidence also excludes it from fidgeting. Diagnostics explain
+eligibility separately from motion amplitude/reversals. Pose visibility remains an
+estimate; this cannot prove that a hand is physically visible through clothing.
+
+A fast supported inward approach may now complete when visibility disappears before
+the 200ms visible approach delay. This requires observed region entry and sufficient
+baseline-relative travel, observed elbow support, recent normal position and a
+currently outward elbow. Arbitrary missing wrists remain insufficient. Memory and
+sustained holds still expire/apply as before. Single-hand candidates are shown in
+the summary; the existing combined pocket alert still requires both hands.
+
+Generated regressions cover upright wording, fast entry then occlusion, upper-body
+sway with fixed hip/pocket/occluded wrists, loss of confidence after visible fidgets,
+and high-confidence wrist estimates accompanied by low-confidence hand tips. These
+changes address identified logic paths and remain unvalidated on real webcam data.
+
+The screenshot-informed front-pocket opening envelope includes wrists slightly
+outside skeletal hip centers. Those outer poses require observed inward travel,
+elbow support and wrist above hip level. `left/rightFrontPocketRegion` expose the
+new envelope; existing `left/rightPocketRegion` remain the narrower legacy geometry.
+A rejected candidate is labeled normal only when it matches calibrated rest;
+otherwise the demo explains the missing entry evidence. Screenshot-like regression
+sequences do not replace testing an actual live entry.
+
+Slouch candidates now use hysteresis: compression must exceed the entry thresholds
+to activate, then recover below 65% of those thresholds to clear. This avoids live
+label flicker around a single boundary without removing sustained alert timing.
+Missing torso data, pauses and recalibration clear the retained state. Both entry
+and recovery thresholds are shown in diagnostics. Pocket accuracy remains an open
+webcam-validation issue; still screenshots do not reveal temporal entry rejection.
+
+### Disappearing-hand fallback
+
+A trace is not required to use the demo. If the insertion trajectory is missed,
+the detector can now infer possible entry from a confidently visible wrist last
+seen near its hip, followed promptly by wrist visibility loss and a sustained,
+new outward elbow change relative to calibration. The elbow must remain confidently
+tracked. It does not require an inferred elbow angle from the hidden wrist.
+
+This path waits 250ms for supporting elbow change, then applies the normal hold
+and sustained-alert delay. Its evidence expires four seconds after the last visible
+near-hip wrist observation; missing frames cannot refresh it. Visible return,
+tracking interruption, absent/weak elbow support and wrists last seen away from hips
+clear or reject it. Per-hand diagnostics show `source: disappearance`, the resting
+elbow baseline and the rejection reason. This is a possible-pocket heuristic and
+cannot distinguish every alternative occlusion, including hands behind the back.

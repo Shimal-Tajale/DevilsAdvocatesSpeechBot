@@ -36,3 +36,8 @@ details { margin-top: 18px; font-size: .85rem; }
 summary { cursor: pointer; }
 #diagnostics { white-space: pre-wrap; overflow-wrap: anywhere; color: #b6d7e7; }
 @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } main { padding: 24px 16px; } }
+
+#analysis-diagnostics { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .76rem; max-height: 700px; overflow: auto; color: #b6d7e7; }
+#torso-history { width: 100%; height: 130px; background: #101a21; }
+
+select { display: block; max-width: 100%; padding: 8px; color: #e7edf1; background: #233e4b; border: 1px solid #658291; border-radius: 8px; font: inherit; }

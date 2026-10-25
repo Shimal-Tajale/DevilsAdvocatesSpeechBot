@@ -46,22 +46,22 @@ test('invalid frames and large gaps do not advance calibration', () => {
 test('alerts wait two seconds and each type has an independent twelve second cooldown', () => {
   const { analysis, alerts } = setup();
   calibrate(analysis);
-  const bad = { ...upright, neckHeight: 0.1, handsLow: 1, headYaw: 0.6 };
+  const bad = { ...upright, neckHeight: 0.1, torsoHeight: 1.1, handsLow: 1, headYaw: 0.6 };
   feed(analysis, bad, 3100, 5000);
   assert.equal(alerts.length, 0);
   analysis.update(bad, 5100);
-  assert.deepEqual(alerts.map(event => event.value), ['posture', 'hands', 'eye_contact']);
+  assert.deepEqual(alerts.map(event => event.value), ['posture', 'eye_contact']);
   feed(analysis, bad, 5200, 17000);
-  assert.equal(alerts.length, 3);
+  assert.equal(alerts.length, 2);
   analysis.update(bad, 17100);
-  assert.equal(alerts.length, 6);
+  assert.equal(alerts.length, 4);
   assert.ok(alerts.every(event => event.type === 'alert'));
 });
 
 test('short deviations and recovery reset sustained timing', () => {
   const { analysis, alerts } = setup();
   calibrate(analysis);
-  const bad = { ...upright, neckHeight: 0.1 };
+  const bad = { ...upright, neckHeight: 0.1, torsoHeight: 1.1 };
   feed(analysis, bad, 3100, 4500);
   analysis.update(upright, 4600);
   feed(analysis, bad, 4700, 6600);
@@ -74,7 +74,7 @@ test('tracking loss, interruption, and frame gaps break sustained timing', () =>
   for (const interruption of ['missing', 'pause', 'gap']) {
     const { analysis, alerts } = setup();
     calibrate(analysis);
-    const bad = { ...upright, handsLow: 1 };
+    const bad = { ...upright, neckHeight: 0.1, torsoHeight: 1.1 };
     feed(analysis, bad, 3100, 4500);
     if (interruption === 'missing') analysis.update(hidden, 4600);
     if (interruption === 'pause') analysis.interrupt();
@@ -97,7 +97,7 @@ test('backward replay time resets baseline and cooldowns', () => {
 test('sustained swaying produces posture alerts', () => {
   const { analysis, alerts } = setup();
   calibrate(analysis);
-  for (let time = 3100; time <= 5500; time += 100) {
+  for (let time = 3100; time <= 11500; time += 100) {
     analysis.update({ ...upright, bodyX: time % 400 < 200 ? 0.35 : 0.65 }, time);
   }
   assert.deepEqual(alerts, [{ type: 'alert', value: 'posture' }]);
@@ -146,7 +146,8 @@ test('landmarks produce scale-normalized posture and hidden/low hand measurement
   const sample = measure(pose);
   assert.ok(Math.abs(sample.neckHeight! - 0.5) < 1e-10);
   assert.ok(Math.abs(sample.torsoHeight! - 1.5) < 1e-10);
-  assert.equal(sample.handsLow, 1);
+  assert.equal(sample.handsLow, null);
+  pose[16] = point(0.6, 0.8);
   pose[15] = point(0.4, 0.45);
   assert.equal(measure(pose).handsLow, 0);
   pose[15] = point(0.4, 0.8);
@@ -195,4 +196,137 @@ test('calibration diagnostics distinguish missing face, posture, and excessive f
   assert.deepEqual(analysis.update({ ...upright, torsoHeight: null }, 100).calibrationBlockers, ['torso']);
   assert.deepEqual(analysis.update({ ...upright, neckHeight: 0 }, 1000).calibrationBlockers, ['neck', 'frame_gap']);
   assert.equal(analysis.update(upright, 1100).calibrationProgress, 0);
+});
+
+const tracked = { ...upright, leftWristVisibility: 1, rightWristVisibility: 1, leftWristX: -0.2, rightWristX: 0.2,
+  leftWristY: 1.3, rightWristY: 1.3, pocketProximity: 0 };
+
+test('upright and hands naturally at sides remain normal even with legacy handsLow', () => {
+  const { analysis, alerts } = setup(); calibrate(analysis);
+  feed(analysis, { ...tracked, handsLow: 1 }, 3100, 18000);
+  assert.equal(alerts.length, 0);
+});
+
+test('static pocket flag without a calibrated wrist-entry trajectory cannot trigger', () => {
+  const { analysis, alerts } = setup(); calibrate(analysis);
+  feed(analysis, { ...tracked, pocketProximity: 1 }, 3100, 9000);
+  assert.equal(alerts.length, 0);
+  const status = analysis.update({ ...tracked, pocketProximity: 1 }, 9100);
+  assert.equal(status.behaviors?.possiblePockets, false);
+  assert.equal(status.debug?.pocketHands?.left.state, 'uncertain');
+  feed(analysis, hidden, 9200, 15000);
+  assert.equal(alerts.length, 0);
+});
+
+test('repetitive wrist motion triggers fidgeting with cooldown, occasional gestures do not', () => {
+  for (const repetitive of [true, false]) {
+    const { analysis, alerts } = setup(); calibrate(analysis);
+    for (let time = 3100; time <= 15000; time += 100) {
+      const x = repetitive ? 0.3 * Math.sin(time * Math.PI / 400)
+        : 0.3 * Math.sin(time * Math.PI / 4000);
+      analysis.update({ ...tracked, leftWristX: x }, time);
+    }
+    assert.equal(alerts.length, repetitive ? 1 : 0);
+  }
+});
+
+test('pocket geometry rejects relaxed sides, gestures, occlusion and out-of-frame wrists', () => {
+  const pose = poseFixture();
+  pose[15] = point(0.4, 0.8); pose[16] = point(0.6, 0.8);
+  assert.equal(measure(pose).pocketProximity, 0);
+  pose[15] = point(0.465, 0.68); pose[16] = point(0.535, 0.68);
+  assert.equal(measure(pose).pocketProximity, 1);
+  pose[15].visibility = 0.1;
+  assert.equal(measure(pose).pocketProximity, null);
+  pose[15] = point(0.46, 1.1);
+  assert.equal(measure(pose).pocketProximity, null);
+});
+
+test('moderate normalized slouch is detected with default smoothing after sustained time', () => {
+  const { analysis, alerts } = setup(250); calibrate(analysis);
+  feed(analysis, { ...upright, neckHeight: 0.39, torsoHeight: 1.27 }, 3100, 6500);
+  assert.equal(alerts.length, 1);
+  analysis.reset();
+  assert.equal(analysis.update(upright, 6600).calibrated, false);
+});
+
+test('broad repeated speaking gestures are not small fidgets', () => {
+  const { analysis, alerts } = setup(); calibrate(analysis);
+  for (let time = 3100; time <= 15000; time += 100) {
+    analysis.update({ ...tracked, leftWristX: Math.sin(time * Math.PI / 500) }, time);
+  }
+  assert.equal(alerts.length, 0);
+});
+
+test('missing wrists break repetitive-motion evidence and recalibration clears it', () => {
+  const { analysis } = setup(); calibrate(analysis);
+  let status = analysis.update(tracked, 3100);
+  for (let time = 3200; time <= 9200; time += 100) {
+    status = analysis.update({ ...tracked, leftWristX: 0.3 * Math.sin(time * Math.PI / 400) }, time);
+  }
+  assert.equal(status.behaviors?.fidgeting, true);
+  status = analysis.update({ ...tracked, leftWristX: null, rightWristX: null }, 9300);
+  assert.equal(status.behaviors?.fidgeting, false);
+  analysis.reset();
+  status = analysis.update(tracked, 9400);
+  assert.equal(status.calibrated, false);
+  assert.equal(status.diagnostics?.wristReversals, 0);
+});
+
+
+test('front-facing pocket geometry is independent of anatomical left/right order and mirroring', () => {
+  for (const mirror of [false, true]) {
+    const pose = poseFixture();
+    pose[15] = point(0.465, 0.68); pose[16] = point(0.535, 0.68);
+    if (mirror) for (const p of pose.filter(Boolean)) p.x = 1 - p.x;
+    assert.equal(measure(pose).pocketProximity, 1);
+    pose[15].y = 0.76; pose[16].y = 0.76;
+    assert.equal(measure(pose).pocketProximity, 0);
+  }
+});
+
+test('wrists beside hips, crossed hands and uncertain tracking are not pocket evidence', () => {
+  const pose = poseFixture();
+  for (const [leftX, rightX, y] of [[0.44, 0.56, 0.68], [0.45, 0.55, 0.72], [0.53, 0.47, 0.68]]) {
+    pose[15] = point(leftX, y); pose[16] = point(rightX, y);
+    assert.equal(measure(pose).pocketProximity, 0);
+  }
+  pose[15] = point(0.465, 0.68, 0.6); pose[16] = point(0.535, 0.68);
+  assert.equal(measure(pose).pocketProximity, null);
+});
+
+test('front-facing body ratios and wrist coordinates ignore translation, scale and camera roll', () => {
+  const pose = poseFixture();
+  pose[15] = point(0.465, 0.68); pose[16] = point(0.535, 0.68);
+  const original = measure(pose);
+  const angle = 0.15;
+  const transformed = pose.map(p => {
+    const x = p.x - 0.5, y = p.y - 0.5;
+    return point(0.55 + 0.8 * (x * Math.cos(angle) - y * Math.sin(angle)),
+      0.5 + 0.8 * (x * Math.sin(angle) + y * Math.cos(angle)));
+  });
+  const result = measure(transformed);
+  for (const key of ['neckHeight', 'torsoHeight', 'leftWristX', 'leftWristY'] as const) {
+    assert.ok(Math.abs(result[key]! - original[key]!) < 1e-10, key);
+  }
+  assert.equal(result.pocketProximity, 1);
+});
+
+
+test('without hands-at-sides calibration, later static hip positions stay uncertain', () => {
+  const { analysis, alerts } = setup(); calibrate(analysis);
+  const pose = poseFixture();
+  const sample = () => ({ ...measure(pose), headYaw: 0, headPitch: 0.5 });
+  pose[15] = point(0.44, 0.73); pose[16] = point(0.56, 0.73);
+  feed(analysis, sample(), 3100, 10000);
+  assert.equal(alerts.length, 0);
+  pose[15] = point(0.465, 0.68); pose[16] = point(0.535, 0.68);
+  feed(analysis, sample(), 10100, 13000);
+  pose[15] = point(0.44, 0.73); pose[16] = point(0.56, 0.73);
+  analysis.update(sample(), 13100);
+  pose[15] = point(0.465, 0.68); pose[16] = point(0.535, 0.68);
+  feed(analysis, sample(), 13200, 19100);
+  assert.equal(alerts.length, 0);
+  analysis.update(sample(), 19200);
+  assert.equal(alerts.length, 0);
 });
