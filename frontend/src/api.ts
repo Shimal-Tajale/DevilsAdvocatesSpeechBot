@@ -3,6 +3,7 @@
 // proxy with relative URLs (/api/..., /ws/...), never a hardcoded host or port.
 // features.useMocks true: every function returns mock data. See API_CONTRACT.md.
 import { features } from './features'
+import { toWav } from './lib/audio'
 import type {
   AnswerResult,
   AudienceQuestion,
@@ -17,9 +18,47 @@ import type {
 const delay = <T>(value: T, ms = 600): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), ms))
 
-async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, init)
-  if (!response.ok) {
+// A backend error. `message` is safe to show to the speaker; `detail` is the backend's own text.
+export class ApiError extends Error {
+  status: number
+  detail: string
+  constructor(message: string, status: number, detail: string) {
+    super(message)
+    this.status = status
+    this.detail = detail
+  }
+}
+
+function friendlyMessage(status: number, detail: string): string {
+  if (detail.includes('corrupt or unsupported data')) {
+    return "I couldn't read that audio. Try recording again, or upload an mp3, m4a, wav, webm or mp4 file."
+  }
+  if (status === 502 && detail.includes('list index out of range')) {
+    return "I couldn't find any speech in that recording. Check that it has sound and is long enough."
+  }
+  if (status === 500) return 'The server had a hiccup. Please try again.'
+  if (detail.length > 200) return 'Speech analysis failed. Please try again.'
+  return detail
+}
+
+const RETRY_STATUSES = [500, 502, 503, 504]
+const RETRY_WAIT_MS = 500
+
+// `retries` is for calls that are safe to repeat: after the database drops an idle
+// connection the first request fails and the next one works.
+async function http<T>(path: string, init?: RequestInit, retries = 0): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    let response: Response
+    try {
+      response = await fetch(`/api${path}`, init)
+    } catch {
+      if (attempt < retries) {
+        await delay(undefined, RETRY_WAIT_MS)
+        continue
+      }
+      throw new ApiError("I couldn't reach the server. Check your connection and try again.", 0, '')
+    }
+    if (response.ok) return response.json() as Promise<T>
     let detail = response.statusText
     try {
       const body = await response.json()
@@ -27,9 +66,12 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // keep the status text
     }
-    throw new Error(detail)
+    if (attempt < retries && RETRY_STATUSES.includes(response.status)) {
+      await delay(undefined, RETRY_WAIT_MS)
+      continue
+    }
+    throw new ApiError(friendlyMessage(response.status, detail), response.status, detail)
   }
-  return response.json() as Promise<T>
 }
 
 // ---- sessions ----
@@ -43,7 +85,7 @@ export function createSession(data: SessionCreate): Promise<Session> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    })
+    }, 1)
   }
   const session: Session = { session_id: crypto.randomUUID(), ...data, results: null }
   mockSessions.push(session)
@@ -52,7 +94,7 @@ export function createSession(data: SessionCreate): Promise<Session> {
 
 // GET /sessions/{session_id}
 export function getSession(session_id: string): Promise<Session> {
-  if (!features.useMocks) return http<Session>(`/sessions/${encodeURIComponent(session_id)}`)
+  if (!features.useMocks) return http<Session>(`/sessions/${encodeURIComponent(session_id)}`, undefined, 1)
   const found = mockSessions.find((s) => s.session_id === session_id)
   return found ? delay(found) : Promise.reject(new Error('Session not found'))
 }
@@ -106,7 +148,7 @@ export function rateAnswer(session_id: string, audio: Blob, asked: AudienceQuest
 
 // GET /history/{speaker}
 export function getHistory(speaker: string): Promise<Session[]> {
-  if (!features.useMocks) return http<Session[]>(`/history/${encodeURIComponent(speaker)}`)
+  if (!features.useMocks) return http<Session[]>(`/history/${encodeURIComponent(speaker)}`, undefined, 1)
   return delay(mockSessions.filter((s) => s.speaker === speaker))
 }
 
@@ -134,18 +176,28 @@ function extensionFor(mime: string): string {
 // POST /speech (multipart: file field "audio", optional form fields "session_id" and
 // "vision" as a JSON string). The real backend also broadcasts state/metrics/feedback/lcd
 // events while it works; the mock does the same.
-export function postSpeech(audio: Blob, options: PostSpeechOptions = {}): Promise<SpeechResponse> {
-  if (!features.useMocks) {
+export async function postSpeech(audio: Blob, options: PostSpeechOptions = {}): Promise<SpeechResponse> {
+  if (features.useMocks) return mockSpeechRun(options)
+  const send = (file: Blob, filename: string) => {
     const form = new FormData()
-    // An uploaded file keeps its own name; a recording gets one that matches its MIME type.
-    const filename = audio instanceof File && audio.name ? audio.name : `speech.${extensionFor(audio.type)}`
-    form.append('audio', audio, filename)
+    form.append('audio', file, filename)
     if (options.session_id) form.append('session_id', options.session_id)
     if (options.vision) form.append('vision', JSON.stringify(options.vision))
     if (options.target_length_sec) form.append('target_length_sec', String(options.target_length_sec))
     return http<SpeechResponse>('/speech', { method: 'POST', body: form })
   }
-  return mockSpeechRun(options)
+  // An uploaded file keeps its own name; a recording gets one that matches its MIME type.
+  const filename = audio instanceof File && audio.name ? audio.name : `speech.${extensionFor(audio.type)}`
+  try {
+    return await send(audio, filename)
+  } catch (error) {
+    // Some recordings and videos are in a container the speech-to-text service rejects.
+    // Decode the sound here and send it again as plain WAV.
+    if (!(error instanceof ApiError) || !error.detail.includes('corrupt or unsupported data')) throw error
+    const wav = await toWav(audio)
+    if (!wav) throw error
+    return send(wav, `${filename.replace(/\.[^.]+$/, '')}.wav`)
+  }
 }
 
 // ---- WS /events ----

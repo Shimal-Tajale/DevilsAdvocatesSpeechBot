@@ -1,5 +1,4 @@
 import { motion } from 'framer-motion'
-import { Ear } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { AlertToaster } from '@/components/AlertToaster'
@@ -9,6 +8,7 @@ import { Mascot } from '@/components/Mascot'
 import { ModeCard } from '@/components/ModeCard'
 import { PermissionPrompt, type PermissionState } from '@/components/PermissionPrompt'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { Wordmark } from '@/components/Wordmark'
 import { TakeQuestionButton } from '@/components/TakeQuestionButton'
 import { features } from '@/features'
 import { useLiveEvents } from '@/hooks/useLiveEvents'
@@ -51,12 +51,7 @@ export default function Home() {
     <div className="page-home min-h-dvh pb-32 text-foreground">
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-4 py-6 sm:px-6 sm:py-10">
         <div className="flex items-center justify-between">
-          <p className="flex items-center gap-2 font-heading text-2xl font-semibold">
-            <span className="flex size-9 items-center justify-center rounded-full bg-lavender text-plum">
-              <Ear className="size-5" aria-hidden />
-            </span>
-            All Ears
-          </p>
+          <Wordmark className="text-3xl sm:text-4xl" />
           <ThemeToggle />
         </div>
         <header className="flex flex-col items-center gap-2 text-center md:flex-row md:gap-8 md:text-left">
