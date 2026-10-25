@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from backend.events import clients, broadcast
-from backend.pipeline import NoSpeechError, VisionStats, ask_question, run_session
+from backend.pipeline import NoSpeechError, VisionStats, ask_question, rate_answer, run_session
 from backend.routes import sessions
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,25 @@ async def question(session_id: UUID):
         raise HTTPException(status_code=502, detail=f"Could not come up with a question: {e}")
     await broadcast({"type": "hand", "value": "lower"})  # called on: hand down, then ask
     return asked
+
+# The speaker's recorded answer to that question, rated once. The question text comes
+# from the client, which got it from /question (questions aren't stored).
+@app.post("/sessions/{session_id}/answer")
+async def answer(session_id: UUID, audio: UploadFile = File(...),
+                 question: str = Form(...), claim: str = Form("")):
+    found = await asyncio.to_thread(sessions.get_session_store().get, session_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    data = await audio.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+    try:
+        return await rate_answer(data, question, claim, found.model_dump(mode="json"))
+    except NoSpeechError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.exception("Answer rating failed")
+        raise HTTPException(status_code=502, detail=f"Could not rate the answer: {e}")
 
 @app.post("/test/{type}/{value}")
 async def test_event(type: str, value: str):

@@ -1,10 +1,12 @@
 import { motion } from 'framer-motion'
-import { ExternalLink, Loader2, Volume2 } from 'lucide-react'
+import { ExternalLink, Loader2, Mic, RotateCcw, Square, Volume2 } from 'lucide-react'
 import { useState } from 'react'
-import { askQuestion } from '@/api'
+import { askQuestion, rateAnswer } from '@/api'
 import { TakeQuestionButton } from '@/components/TakeQuestionButton'
 import { Button } from '@/components/ui/button'
-import type { AudienceQuestion } from '@/types'
+import { useRecorder } from '@/hooks/useRecorder'
+import { scoreLabel } from '@/lib/scoring'
+import type { AnswerResult, AudienceQuestion } from '@/types'
 
 // The browser's voice: the design doc's text-to-speech fallback.
 function speak(text: string) {
@@ -14,6 +16,122 @@ function speak(text: string) {
 }
 
 type Phase = 'waiting' | 'asking' | 'asked' | 'failed'
+
+const pill = 'h-11 gap-2 self-start rounded-full px-5 text-base font-semibold'
+
+// Answer the question once: record, stop, rate. Re-recording is only offered if the
+// rating failed (e.g. no speech was heard), not after a score.
+function AnswerBox({ sessionId, asked }: { sessionId: string; asked: AudienceQuestion }) {
+  const recorder = useRecorder()
+  const [rating, setRating] = useState<'idle' | 'rating' | 'failed'>('idle')
+  const [result, setResult] = useState<AnswerResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const { state } = recorder
+
+  const start = () => {
+    window.speechSynthesis?.cancel() // or the mic records the question being read out
+    void recorder.start()
+  }
+
+  const rate = async () => {
+    if (!recorder.recording) return
+    setRating('rating')
+    setError(null)
+    try {
+      const answer = await rateAnswer(sessionId, recorder.recording.blob, asked)
+      setResult(answer)
+      speak(answer.rating.robot_line)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong')
+      setRating('failed')
+    }
+  }
+
+  if (result) {
+    const { score, answered, did_well, improve } = result.rating
+    return (
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-2 border-t border-foreground/10 pt-3">
+        <h3 className="font-semibold">Your answer</h3>
+        <p className="font-heading text-3xl font-semibold">
+          {score}/10 <span className="text-base font-semibold text-muted-foreground">{scoreLabel(score)}</span>
+        </p>
+        {!answered && <p className="rounded-2xl bg-butter/50 px-3 py-2">That did not quite answer the question.</p>}
+        <p>
+          <span className="font-semibold">Did well: </span>
+          {did_well}
+        </p>
+        <p>
+          <span className="font-semibold">Try next: </span>
+          {improve}
+        </p>
+        <p className="text-sm text-muted-foreground">
+          {result.metrics.wpm} words per minute, {result.metrics.fillers} filler{result.metrics.fillers === 1 ? '' : 's'}
+        </p>
+        <dl className="flex flex-col gap-2 rounded-2xl bg-card p-3 text-sm" aria-label="Transcript of the question and your answer">
+          <div>
+            <dt className="font-semibold">Earnest asked</dt>
+            <dd>{asked.question}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold">You said</dt>
+            <dd>{result.transcript}</dd>
+          </div>
+        </dl>
+      </motion.div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-foreground/10 pt-3">
+      <h3 className="font-semibold">Your answer</h3>
+      {state === 'idle' && (
+        <Button onClick={start} className={`${pill} bg-mode-strong text-on-mode-strong hover:bg-mode-strong/90`}>
+          <Mic className="size-5" aria-hidden /> Answer it
+        </Button>
+      )}
+      {state === 'requesting' && <p role="status">Waiting for microphone permission...</p>}
+      {(state === 'recording' || state === 'paused') && (
+        <>
+          <p role="timer" className="font-semibold">
+            Recording your answer... {Math.floor(recorder.elapsedMs / 1000)}s
+          </p>
+          <Button onClick={recorder.stop} className={`${pill} bg-coral text-plum hover:bg-coral/85`}>
+            <Square className="size-5" aria-hidden /> Stop
+          </Button>
+        </>
+      )}
+      {(state === 'denied' || state === 'no_mic' || state === 'unsupported' || state === 'error') && (
+        <div role="alert" className="flex flex-col items-start gap-2">
+          <p>The microphone is not available, so I cannot hear your answer.</p>
+          <Button variant="outline" onClick={start} className={`${pill} border-2 border-foreground/20 bg-card`}>
+            Try again
+          </Button>
+        </div>
+      )}
+      {state === 'review' && recorder.recording && rating !== 'rating' && (
+        <>
+          <audio controls src={recorder.recording.url} className="w-full" />
+          {rating === 'failed' && <p role="alert">I could not rate that: {error}</p>}
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={rate} className={`${pill} bg-mode-strong text-on-mode-strong hover:bg-mode-strong/90`}>
+              {rating === 'failed' ? 'Try again' : 'Rate my answer'}
+            </Button>
+            {rating === 'failed' && (
+              <Button variant="outline" onClick={recorder.reset} className={`${pill} border-2 border-foreground/20 bg-card`}>
+                <RotateCcw className="size-4" aria-hidden /> Record again
+              </Button>
+            )}
+          </div>
+        </>
+      )}
+      {rating === 'rating' && (
+        <p role="status" className="flex items-center gap-2 font-semibold">
+          <Loader2 className="size-5 animate-spin" aria-hidden /> Earnest is weighing your answer...
+        </p>
+      )}
+    </div>
+  )
+}
 
 // After a speech the backend raises Earnest's hand (and the robot's). Calling on it
 // runs one web search and shows a question about a claim from the speech, with its source.
@@ -80,6 +198,7 @@ export function QuestionCard({ sessionId }: { sessionId: string }) {
           <Button variant="outline" onClick={() => speak(asked.question)} className="h-10 gap-2 self-start rounded-full border-2 border-foreground/20 bg-card px-5 font-semibold">
             <Volume2 className="size-4" aria-hidden /> Hear it again
           </Button>
+          <AnswerBox sessionId={sessionId} asked={asked} />
         </motion.div>
       )}
     </section>

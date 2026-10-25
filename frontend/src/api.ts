@@ -4,6 +4,7 @@
 // features.useMocks true: every function returns mock data. See API_CONTRACT.md.
 import { features } from './features'
 import type {
+  AnswerResult,
   AudienceQuestion,
   EventsMessage,
   Session,
@@ -74,6 +75,32 @@ export function askQuestion(session_id: string): Promise<AudienceQuestion> {
       },
     },
     2000,
+  )
+}
+
+// POST /sessions/{session_id}/answer. The question text is sent along because the
+// backend does not store questions.
+export function rateAnswer(session_id: string, audio: Blob, asked: AudienceQuestion): Promise<AnswerResult> {
+  if (!features.useMocks) {
+    const form = new FormData()
+    form.append('audio', audio, `answer.${extensionFor(audio.type)}`)
+    form.append('question', asked.question)
+    form.append('claim', asked.claim)
+    return http<AnswerResult>(`/sessions/${encodeURIComponent(session_id)}/answer`, { method: 'POST', body: form })
+  }
+  return delay(
+    {
+      transcript: 'I read it in a blog post, but you are right, I should check the original survey.',
+      metrics: { wpm: 138, fillers: 1, filler_list: ['um'], speaking_time: 6.2 },
+      rating: {
+        score: 6,
+        answered: true,
+        did_well: 'You owned the gap honestly: "you are right, I should check the original survey."',
+        improve: 'Name a concrete source or number next time instead of "a blog post".',
+        robot_line: 'Honest answer! Bring a real source next time.',
+      },
+    },
+    2500,
   )
 }
 

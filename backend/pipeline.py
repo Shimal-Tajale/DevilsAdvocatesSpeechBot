@@ -307,6 +307,52 @@ class NoSpeechError(ValueError):
     pass
 
 
+# ---- the speaker's answer to that question: recorded once, rated once ----
+
+class AnswerRating(BaseModel):
+    score: int        # 0-10
+    answered: bool    # False if the answer dodged the question
+    did_well: str
+    improve: str
+    robot_line: str
+
+
+async def rate_answer(audio: bytes, question: str, claim: str, session: dict | None = None) -> dict:
+    await broadcast({"type": "state", "value": "thinking"})
+    try:
+        transcription = await transcribe(audio, vocabulary(session))
+        if not transcription["words"]:
+            raise NoSpeechError("No speech detected in the answer")
+        m = compute_metrics(transcription)
+        metrics = {k: m[k] for k in ("wpm", "fillers", "filler_list", "speaking_time")}
+
+        rating = AnswerRating.model_validate_json(await call_gemini(f"""You are a friendly, honest speech coach. After a practice speech you asked the speaker:
+"{question}"
+(about their claim: "{claim}")
+
+Their spoken answer:
+\"\"\"{transcription['transcript']}\"\"\"
+
+Measured (facts; explain them, never contradict them):
+{json.dumps(metrics)}
+
+Rate the answer 0-10 on: did it directly answer the question; did it give evidence or a
+concrete reason; was it clear and concise; was it composed (few fillers).
+- answered is false if they dodged the question or talked about something else.
+- did_well and improve: one specific sentence each, quoting or pointing to the answer.
+- robot_line is spoken aloud by a robot: one short, friendly sentence, under 15 words.
+Return JSON only.""", AnswerRating)).model_dump()
+
+        await broadcast({"type": "lcd", "value": f"Answer: {rating['score']}/10"})
+        await broadcast({"type": "state", "value": "speaking"})
+        return {"transcript": transcription["transcript"], "metrics": metrics, "rating": rating}
+    except Exception:
+        await broadcast({"type": "lcd", "value": "Try again"})
+        raise
+    finally:
+        await broadcast({"type": "state", "value": "idle"})
+
+
 async def save_session(result: dict) -> bool:
     """False instead of raising: a database outage must not cost the speaker their feedback."""
     if result["session_id"] is None:

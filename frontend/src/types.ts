@@ -138,6 +138,14 @@ export interface AudienceQuestion {
   source: { title: string; url: string; snippet: string } | null
 }
 
+// POST /sessions/{session_id}/answer: the speaker's recorded answer to that question,
+// rated once. score is 0-10; answered is false when the answer dodged the question.
+export interface AnswerResult {
+  transcript: string
+  metrics: { wpm: number; fillers: number; filler_list: string[]; speaking_time: number }
+  rating: { score: number; answered: boolean; did_well: string; improve: string; robot_line: string }
+}
+
 // POST /speech response.
 export interface SpeechResponse extends SessionResults {
   session_id: string | null // null when the request had no session_id
