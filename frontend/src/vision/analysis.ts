@@ -37,11 +37,15 @@ export class VisionAnalysis {
   private handCondition: 'pockets' | 'fidget' | null = null;
   private since: Partial<Record<AlertValue, number>> = {};
   private emitted: Partial<Record<AlertValue, number>> = {};
+  // A plain field, not a constructor parameter property, so the app's
+  // erasableSyntaxOnly setting accepts this file.
+  private readonly onAlert: (event: VisionAlert) => void;
 
   constructor(
-    private readonly onAlert: (event: VisionAlert) => void,
+    onAlert: (event: VisionAlert) => void,
     options: Partial<AnalysisOptions> = {},
   ) {
+    this.onAlert = onAlert;
     this.options = { ...DEFAULT_ANALYSIS, ...options };
     this.pockets = new FrontPocketEntry({ visibility: this.options.pocketVisibility,
       inwardTravel: this.options.pocketInwardTravel, minBaselineSamples: this.options.pocketBaselineSamples });

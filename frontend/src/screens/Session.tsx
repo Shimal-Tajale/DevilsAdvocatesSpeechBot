@@ -3,14 +3,18 @@ import { Check, Loader2, Mic, Pause, Play, RotateCcw, Square, TriangleAlert } fr
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { createSession, postSpeech } from '@/api'
+import { AlertToaster } from '@/components/AlertToaster'
 import { Mascot } from '@/components/Mascot'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { VolumeMeter } from '@/components/VolumeMeter'
 import { Button } from '@/components/ui/button'
+import { features } from '@/features'
+import { useLiveEvents } from '@/hooks/useLiveEvents'
 import { useRecorder, type RecorderState } from '@/hooks/useRecorder'
 import { useSpeaker } from '@/hooks/useSpeaker'
+import { useVision, type VisionState } from '@/hooks/useVision'
 import { MODES } from '@/modes'
-import type { Mood, ModeId } from '@/types'
+import type { Mood, ModeId, VisionStats } from '@/types'
 
 const MIN_SECONDS = 5
 const PROGRESS_STEPS = ['Transcribing', 'Measuring', 'Writing feedback']
@@ -38,6 +42,13 @@ const MIC_HELP: Partial<Record<RecorderState, { title: string; body: string }>> 
   },
 }
 
+const VISION_STATUS: Partial<Record<VisionState, string>> = {
+  loading: 'Starting the camera...',
+  calibrating: 'Stand naturally and face the camera for a few seconds.',
+  watching: 'Watching your posture and eye contact.',
+  unavailable: 'The camera is off, so no posture tips this time. I am still listening.',
+}
+
 function formatTime(ms: number) {
   const total = Math.floor(ms / 1000)
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
@@ -60,6 +71,33 @@ export default function Session({ mode }: { mode: ModeId }) {
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const sessionId = useRef<string | null>(null)
   const navTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  // Vision alerts go out over /events: the server relays them to the robot and
+  // back to this screen's toasts.
+  const { toasts, send, dismissToast } = useLiveEvents()
+  const {
+    state: visionState,
+    videoRef,
+    record: visionRecord,
+    pause: visionPause,
+    stop: visionStop,
+  } = useVision((value) => send({ type: 'alert', value }))
+  const visionStats = useRef<VisionStats | undefined>(undefined)
+
+  // The camera and the robot follow the recorder.
+  useEffect(() => {
+    if (recorder.state === 'recording') {
+      visionRecord()
+      send({ type: 'state', value: 'listening' })
+    } else if (recorder.state === 'paused') {
+      visionPause()
+    } else if (recorder.state === 'review') {
+      visionStats.current = visionStop()
+      send({ type: 'state', value: 'idle' })
+    } else if (recorder.state === 'error') {
+      visionStop()
+    }
+  }, [recorder.state, visionRecord, visionPause, visionStop, send])
 
   const targetSeconds = targetMinutes.trim() ? Math.round(Number(targetMinutes) * 60) : undefined
 
@@ -103,7 +141,11 @@ export default function Session({ mode }: { mode: ModeId }) {
         const session = await createSession({ speaker: speaker.trim(), mode, topic: topic.trim() })
         sessionId.current = session.session_id
       }
-      const result = await postSpeech(recording.blob, { session_id: sessionId.current, target_length_sec: targetSeconds })
+      const result = await postSpeech(recording.blob, {
+        session_id: sessionId.current,
+        target_length_sec: targetSeconds,
+        vision: visionStats.current,
+      })
       setAnalysis('done')
       const id = sessionId.current
       navTimer.current = setTimeout(() => navigate(`/results/${id}`, { state: { result, mode } }), 1200)
@@ -118,6 +160,7 @@ export default function Session({ mode }: { mode: ModeId }) {
   const reRecord = () => {
     setAnalysis('idle')
     setAnalysisError(null)
+    visionStats.current = undefined
     recorder.reset()
   }
 
@@ -132,6 +175,7 @@ export default function Session({ mode }: { mode: ModeId }) {
 
   return (
     <div data-mode={mode} className="page-mode min-h-dvh pb-10 text-foreground">
+      <AlertToaster toasts={toasts} onDismiss={dismissToast} />
       <main className="mx-auto flex w-full max-w-xl flex-col items-center gap-5 px-4 py-6 text-center sm:px-6">
         <div className="flex w-full items-center justify-between text-sm font-semibold">
           <Link to="/" className="underline underline-offset-4">
@@ -189,6 +233,26 @@ export default function Session({ mode }: { mode: ModeId }) {
             </div>
 
             <VolumeMeter level={recorder.level} active={recordingActive} />
+
+            {/* Always mounted so the analysis has a video element; shown once the camera starts. */}
+            <div className={visionState === 'off' ? 'hidden' : 'flex flex-col items-center gap-2'}>
+              <video
+                ref={videoRef}
+                muted
+                playsInline
+                aria-label="Camera preview"
+                className={
+                  features.cameraPreview && visionState !== 'unavailable'
+                    ? 'w-40 -scale-x-100 rounded-2xl border-2 border-foreground/15 bg-foreground/5 sm:w-48'
+                    : 'sr-only'
+                }
+              />
+              {VISION_STATUS[visionState] && (
+                <p role="status" className="text-sm text-muted-foreground">
+                  {VISION_STATUS[visionState]}
+                </p>
+              )}
+            </div>
 
             {analysis === 'idle' && state === 'idle' && (
               <>
