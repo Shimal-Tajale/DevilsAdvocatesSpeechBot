@@ -166,8 +166,7 @@ export function QuestionCard({ sessionId, mode }: { sessionId: string; mode: Mod
     try {
       const result = await askQuestion(sessionId)
       setAsked(result)
-      setPhase('asked')
-      speak(result.question)
+      setPhase('asked') // shown as text; read aloud only on request ("Hear it")
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong')
       setPhase('failed')
@@ -218,7 +217,7 @@ export function QuestionCard({ sessionId, mode }: { sessionId: string; mode: Mod
             </a>
           )}
           <Button variant="outline" onClick={() => speak(asked.question)} className="h-10 gap-2 self-start rounded-full border-2 border-foreground/20 bg-card px-5 font-semibold">
-            <Volume2 className="size-4" aria-hidden /> Hear it again
+            <Volume2 className="size-4" aria-hidden /> Hear it
           </Button>
           <AnswerBox sessionId={sessionId} asked={asked} copy={copy} />
         </motion.div>
