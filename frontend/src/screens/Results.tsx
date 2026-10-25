@@ -1,12 +1,23 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
-import { getSession, postSpeech } from '@/api'
+import { getSession, mockResultsByVariant, type MockVariant } from '@/api'
+import { DevMockToggle } from '@/components/DevMockToggle'
 import { Mascot } from '@/components/Mascot'
-import { ScoreBar } from '@/components/ScoreBar'
+import { LabelChip, NotScoredRow, ScoreBar } from '@/components/ScoreBar'
 import { ScoreRing } from '@/components/ScoreRing'
 import { features } from '@/features'
-import { CATEGORY_LABEL, CATEGORY_ORDER, CRITERION_LABEL, presentScores, scoreLabel } from '@/lib/scoring'
-import type { CategoryId, SessionResults, SpeechResponse } from '@/types'
+import {
+  CATEGORY_CRITERIA,
+  CATEGORY_LABEL,
+  CATEGORY_ORDER,
+  CRITERION_LABEL,
+  NOT_SCORED_REASON,
+  average,
+  presentScores,
+  scoreColor,
+} from '@/lib/scoring'
+import { ThemeToggle } from '@/components/ThemeToggle'
+import type { CriterionScore, ModeId, SessionResults, SpeechResponse } from '@/types'
 
 function highlightFillers(transcript: string, fillers: string[]) {
   const unique = [...new Set(fillers.map((f) => f.toLowerCase()))]
@@ -26,48 +37,42 @@ function highlightFillers(transcript: string, fillers: string[]) {
 export default function Results() {
   const location = useLocation()
   const { session_id } = useParams()
-  // Results come from the router state (right after POST /speech), or from the saved
-  // session at /results/:session_id, or, with mocks on, from the mock backend at /results.
-  const passed = (location.state as { result?: SpeechResponse } | null)?.result
-  const key = session_id ?? 'mock'
-  const needsLoad = !passed && (session_id !== undefined || features.useMocks)
-  const [loaded, setLoaded] = useState<{ key: string; result?: SessionResults; error?: string } | null>(null)
+  // Results come from the router state (right after POST /speech), or from the saved session at
+  // /results/:session_id. At /results with no session, development builds (and mock mode) show a mock.
+  const navState = location.state as { result?: SpeechResponse; mode?: ModeId } | null
+  const passed = navState?.result
+  const [variant, setVariant] = useState<MockVariant>('full')
+  const showMock = !passed && session_id === undefined && (features.useMocks || import.meta.env.DEV)
+  const needsLoad = !passed && session_id !== undefined
+  const [loaded, setLoaded] = useState<{ key: string; result?: SessionResults; mode?: ModeId; error?: string } | null>(null)
 
   useEffect(() => {
     if (!needsLoad) return
     let cancelled = false
-    const load = session_id
-      ? getSession(session_id).then((s) =>
-          s.results ? { result: s.results } : { error: 'This session has no recording yet.' },
-        )
-      : postSpeech(new Blob()).then((result) => ({ result }))
-    load
-      .then((v) => !cancelled && setLoaded({ key, ...v }))
-      .catch((e: Error) => !cancelled && setLoaded({ key, error: e.message }))
+    getSession(session_id)
+      .then((s) => (s.results ? { result: s.results, mode: s.mode } : { error: 'This session has no recording yet.' }))
+      .then((v) => !cancelled && setLoaded({ key: session_id, ...v }))
+      .catch((e: Error) => !cancelled && setLoaded({ key: session_id, error: e.message }))
     return () => {
       cancelled = true
     }
-  }, [needsLoad, session_id, key])
+  }, [needsLoad, session_id])
 
-  const current = loaded?.key === key ? loaded : null
-  const result: (SessionResults & Partial<SpeechResponse>) | null = passed ?? current?.result ?? null
+  const current = loaded?.key === session_id ? loaded : null
+  const result: (SessionResults & Partial<SpeechResponse>) | null =
+    passed ?? current?.result ?? (showMock ? mockResultsByVariant[variant] : null)
   const error = current?.error
-  const canFetchMock = needsLoad && !error
-
-  const criteriaByCategory = useMemo(() => {
-    const groups = new Map<CategoryId, NonNullable<SpeechResponse['feedback']['criteria']>>()
-    for (const c of result?.feedback.criteria ?? []) groups.set(c.category, [...(groups.get(c.category) ?? []), c])
-    return groups
-  }, [result])
+  const mode: ModeId = navState?.mode ?? current?.mode ?? 'presentation' // themes the page like the session was
+  const loading = needsLoad && !error
 
   if (!result) {
     return (
-      <main className="mx-auto flex min-h-dvh max-w-2xl flex-col items-center justify-center gap-4 p-6 text-center text-plum">
-        <Mascot mood={canFetchMock ? 'thinking' : 'idle'} className="w-40" />
+      <main data-mode={mode} className="page-mode mx-auto flex min-h-dvh max-w-none flex-col items-center justify-center gap-4 p-6 text-center text-foreground">
+        <Mascot mood={loading ? 'thinking' : 'idle'} className="w-40" />
         <h1 className="text-2xl font-semibold">
-          {canFetchMock ? 'Earnest is reading your speech...' : (error ?? 'No results to show yet')}
+          {loading ? 'Earnest is reading your speech...' : (error ?? 'No results to show yet')}
         </h1>
-        {!canFetchMock && (
+        {!loading && (
           <Link to="/" className="font-semibold underline underline-offset-4">
             Back to home
           </Link>
@@ -77,20 +82,34 @@ export default function Results() {
   }
 
   const { feedback, metrics, transcript } = result
-  const scores = presentScores(feedback.scores)
-  const criteriaGroups = CATEGORY_ORDER.filter((id): id is CategoryId => id !== 'confidence' && criteriaByCategory.has(id))
+  const criteria = feedback.criteria
+  const confidence = feedback.scores.confidence
 
   return (
-    <div className="min-h-dvh bg-warm pb-16 text-plum">
+    <div data-mode={mode} className="page-mode min-h-dvh pb-24 text-foreground">
       <main className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-6 sm:px-6 sm:py-10">
+        <div className="flex items-center justify-between text-sm font-semibold">
+          <Link to="/" className="underline underline-offset-4">
+            Back to home
+          </Link>
+          <ThemeToggle />
+        </div>
+
         <header className="flex flex-col items-center gap-4 text-center sm:flex-row sm:text-left">
-          <Mascot mood={feedback.overall >= 70 ? 'happy' : 'idle'} className="w-40 shrink-0" />
-          <div className="flex flex-col items-center gap-3 sm:items-start">
-            <h1 className="text-3xl font-semibold">Your results</h1>
-            <p className="rounded-3xl bg-white px-5 py-3 text-lg shadow-[0_6px_0_0_rgba(43,33,64,0.08)]">{feedback.robot_line}</p>
-          </div>
-          <div className="sm:ml-auto">
-            <ScoreRing score={feedback.overall} />
+          <Mascot mood={feedback.overall >= 70 ? 'happy' : 'idle'} className="w-36 shrink-0" />
+          <h1 className="text-3xl font-semibold">Your results</h1>
+          <div className="flex flex-col items-center gap-2 sm:ml-auto">
+            <ScoreRing score={feedback.overall} color={scoreColor(feedback.overall / 10)} />
+            <LabelChip score={feedback.overall / 10} />
+            {typeof confidence === 'number' && (
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full bg-card px-2.5 py-0.5 text-xs font-semibold ring-1 ring-foreground/20"
+                title="Built from your measured delivery, body language and confident language"
+              >
+                <span aria-hidden className="size-2 rounded-full" style={{ backgroundColor: scoreColor(confidence) }} />
+                Confidence score {confidence}/10
+              </span>
+            )}
           </div>
         </header>
 
@@ -122,35 +141,54 @@ export default function Results() {
           </ul>
         </section>
 
-        <section aria-labelledby="scores-heading" className="flex flex-col gap-4 rounded-3xl bg-white p-5">
+        <figure className="rounded-3xl border-l-8 border-mode bg-mode-soft px-5 py-4">
+          <blockquote className="font-heading text-lg">&ldquo;{feedback.robot_line}&rdquo;</blockquote>
+          <figcaption className="mt-1 text-sm text-muted-foreground">Earnest</figcaption>
+        </figure>
+
+        <section aria-labelledby="scores-heading" className="flex flex-col gap-6 rounded-3xl border-2 border-mode bg-card p-5">
           <h2 id="scores-heading" className="text-xl font-semibold">
             Your scores
           </h2>
-          {scores.map(({ id, score }) => (
-            <ScoreBar key={id} name={CATEGORY_LABEL[id]} score={score} />
-          ))}
-          <p className="text-sm text-muted-foreground">
-            The confidence score is built from your measured delivery, body language and confident language.
-          </p>
+          {criteria ? (
+            CATEGORY_ORDER.map((category) => {
+              const rows = CATEGORY_CRITERIA[category].map((id) => ({ id, found: criteria.find((c) => c.id === id) }))
+              const scored = rows.flatMap((r): CriterionScore[] => (r.found ? [r.found] : []))
+              const avg = average(scored.map((c) => c.score)) // missing criteria are ignored
+              return (
+                <div key={category} className="flex flex-col gap-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-mode pb-2">
+                    <h3 className="text-lg font-semibold text-mode-strong">{CATEGORY_LABEL[category]}</h3>
+                    {avg === null ? (
+                      <span className="text-sm font-semibold text-muted-foreground">Not scored</span>
+                    ) : (
+                      <span className="flex items-center gap-2">
+                        <span className="font-heading text-lg font-semibold tabular-nums">{avg}/10</span>
+                        <LabelChip score={avg} />
+                      </span>
+                    )}
+                  </div>
+                  {rows.map(({ id, found }) =>
+                    found ? (
+                      <ScoreBar key={id} name={CRITERION_LABEL[id]} score={found.score} detail={found.detail} tip={found.tip} />
+                    ) : (
+                      <NotScoredRow key={id} name={CRITERION_LABEL[id]} reason={NOT_SCORED_REASON[id]} />
+                    ),
+                  )}
+                </div>
+              )
+            })
+          ) : (
+            <div className="flex flex-col gap-4">
+              {presentScores(feedback.scores).map(({ id, score }) => (
+                <ScoreBar key={id} name={CATEGORY_LABEL[id]} score={score} />
+              ))}
+              <p className="text-sm text-muted-foreground">Detailed scores are not available for this recording.</p>
+            </div>
+          )}
         </section>
 
-        {feedback.criteria && (
-          <section aria-labelledby="criteria-heading" className="flex flex-col gap-6 rounded-3xl bg-white p-5">
-            <h2 id="criteria-heading" className="text-xl font-semibold">
-              The details
-            </h2>
-            {criteriaGroups.map((category) => (
-              <div key={category} className="flex flex-col gap-4">
-                <h3 className="text-lg font-semibold">{CATEGORY_LABEL[category]}</h3>
-                {criteriaByCategory.get(category)!.map((c) => (
-                  <ScoreBar key={c.id} name={CRITERION_LABEL[c.id]} score={c.score} detail={c.detail} tip={c.tip} />
-                ))}
-              </div>
-            ))}
-          </section>
-        )}
-
-        <section aria-labelledby="numbers-heading" className="flex flex-col gap-3 rounded-3xl bg-white p-5">
+        <section aria-labelledby="numbers-heading" className="flex flex-col gap-3 rounded-3xl border border-foreground/10 bg-card p-5">
           <h2 id="numbers-heading" className="text-xl font-semibold">
             By the numbers
           </h2>
@@ -172,20 +210,19 @@ export default function Results() {
           </dl>
         </section>
 
-        <section aria-labelledby="transcript-heading" className="flex flex-col gap-3 rounded-3xl bg-white p-5">
+        <section aria-labelledby="transcript-heading" className="flex flex-col gap-3 rounded-3xl border border-foreground/10 bg-card p-5">
           <h2 id="transcript-heading" className="text-xl font-semibold">
             Transcript
           </h2>
           <p className="leading-relaxed">{highlightFillers(transcript, metrics.filler_list)}</p>
-          <p className="text-sm text-muted-foreground">
-            Overall: {scoreLabel(feedback.overall / 10)}. Filler words are highlighted.
-          </p>
+          <p className="text-sm text-muted-foreground">Filler words are highlighted.</p>
         </section>
 
         <Link to="/" className="self-center font-semibold underline underline-offset-4">
           Back to home
         </Link>
       </main>
+      {showMock && <DevMockToggle value={variant} onChange={setVariant} />}
     </div>
   )
 }

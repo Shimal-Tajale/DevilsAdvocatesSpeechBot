@@ -125,7 +125,7 @@ The Start screen asks for a speaker name; no setup screen creates a session yet,
 
 ## 5. Dev tools
 
-In development only, Home shows two bars: dev moods, and dev events (send `state`, `hand` and `alert` messages over the same bus, record a test speech, and open the mock Results screen). "record test speech (real backend)" records from the microphone, calls `createSession`, then `postSpeech` with the `session_id`, then opens `/results/:session_id`. It needs the backend running with `DEEPGRAM_API_KEY` and `GEMINI_API_KEY`.
+In development only: Home shows a dev mood bar, and `/results` shows a "Dev mock" bar that switches between the mock results (all 13 criteria, no camera or script, scores only). Recording a real speech is done on the practice session screen.
 
 ## 6. Where the backend code and the docs disagree
 

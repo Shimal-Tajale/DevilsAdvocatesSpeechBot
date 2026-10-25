@@ -48,7 +48,7 @@ export function PermissionPrompt({ onChange }: PermissionPromptProps) {
   return (
     <section
       aria-labelledby="permission-heading"
-      className="flex flex-col gap-4 rounded-3xl bg-plum p-5 text-warm sm:flex-row sm:items-center sm:justify-between"
+      className="flex flex-col gap-4 rounded-3xl bg-plum p-5 text-warm dark:border-2 dark:border-lavender/40 dark:bg-secondary sm:flex-row sm:items-center sm:justify-between"
     >
       <div className="flex items-start gap-3">
         <span className="flex shrink-0 gap-1 pt-1 text-mint" aria-hidden>

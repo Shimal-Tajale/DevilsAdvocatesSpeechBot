@@ -3,11 +3,11 @@ import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { AlertToaster } from '@/components/AlertToaster'
 import { ComingSoonBadge } from '@/components/ComingSoonBadge'
-import { DevEventTools } from '@/components/DevEventTools'
 import { DevMoodSwitcher } from '@/components/DevMoodSwitcher'
 import { Mascot } from '@/components/Mascot'
 import { ModeCard } from '@/components/ModeCard'
 import { PermissionPrompt, type PermissionState } from '@/components/PermissionPrompt'
+import { ThemeToggle } from '@/components/ThemeToggle'
 import { TakeQuestionButton } from '@/components/TakeQuestionButton'
 import { features } from '@/features'
 import { useLiveEvents } from '@/hooks/useLiveEvents'
@@ -47,17 +47,20 @@ export default function Home() {
   const takeQuestion = () => send({ type: 'hand', value: 'lower' })
 
   return (
-    <div className="min-h-dvh bg-warm pb-32 text-plum">
+    <div className="page-home min-h-dvh pb-32 text-foreground">
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-4 py-6 sm:px-6 sm:py-10">
+        <div className="flex justify-end">
+          <ThemeToggle />
+        </div>
         <header className="flex flex-col items-center gap-2 text-center md:flex-row md:gap-8 md:text-left">
           <Mascot mood={mood} onClick={handRaised ? takeQuestion : undefined} className="w-48 shrink-0 sm:w-60 md:w-64" />
           <div className="flex flex-col items-center gap-3 md:items-start">
-            <p className="font-heading text-sm font-medium uppercase tracking-widest text-plum/60">Speech coach</p>
+            <p className="font-heading text-sm font-medium uppercase tracking-widest text-foreground/60">Speech coach</p>
             <motion.div
               key={GREETING[permission]}
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
-              className="relative rounded-3xl bg-white px-5 py-4 shadow-[0_6px_0_0_rgba(43,33,64,0.08)]"
+              className="relative rounded-3xl border-2 border-lavender bg-card px-5 py-4 shadow-[0_6px_0_0_var(--border)]"
             >
               <h1 className="text-2xl leading-snug font-semibold sm:text-3xl">{GREETING[permission]}</h1>
             </motion.div>
@@ -73,7 +76,7 @@ export default function Home() {
                 onChange={(e) => setSpeaker(e.target.value)}
                 placeholder="Your name"
                 autoComplete="given-name"
-                className="h-11 rounded-2xl border-2 border-plum/15 bg-white px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
+                className="h-11 rounded-2xl border-2 border-foreground/15 bg-card px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
               />
               <p className="text-sm text-muted-foreground">I use your name to keep your practice history.</p>
             </div>
@@ -94,13 +97,13 @@ export default function Home() {
           {features.history ? (
             <Link
               to="/history"
-              className="rounded-3xl border-2 border-plum/10 bg-white p-4 font-semibold hover:border-plum/30 focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="rounded-3xl border-2 border-foreground/10 bg-card p-4 font-semibold hover:border-foreground/30 focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
               See your progress
             </Link>
           ) : (
-            <div className="flex items-center justify-between gap-3 rounded-3xl border-2 border-dashed border-plum/15 p-4" aria-disabled="true">
-              <span className="font-semibold text-plum/70">Your progress over time</span>
+            <div className="flex items-center justify-between gap-3 rounded-3xl border-2 border-dashed border-foreground/15 p-4" aria-disabled="true">
+              <span className="font-semibold text-foreground/70">Your progress over time</span>
               <ComingSoonBadge />
             </div>
           )}
@@ -109,7 +112,6 @@ export default function Home() {
         <PermissionPrompt onChange={setPermission} />
       </main>
       <AlertToaster toasts={toasts} onDismiss={dismissToast} />
-      <DevEventTools send={send} speaker={speaker} />
       <DevMoodSwitcher value={override} onChange={setOverride} />
     </div>
   )

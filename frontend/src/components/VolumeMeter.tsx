@@ -20,7 +20,7 @@ export function VolumeMeter({ level, active }: VolumeMeterProps) {
       {Array.from({ length: BARS }, (_, i) => (
         <span
           key={i}
-          className={`w-2 rounded-full transition-colors duration-100 sm:w-2.5 ${i < lit ? 'bg-mint' : 'bg-plum/10'}`}
+          className={`w-2 rounded-full transition-colors duration-100 sm:w-2.5 ${i < lit ? 'bg-mode-strong' : 'bg-foreground/15'}`}
           style={{ height: `${40 + (i / BARS) * 60}%` }}
         />
       ))}

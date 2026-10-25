@@ -159,20 +159,20 @@ function mockBroadcast(message: EventsMessage) {
 async function mockSpeechRun(options: PostSpeechOptions): Promise<SpeechResponse> {
   mockBroadcast({ type: 'state', value: 'thinking' })
   await delay(null, 1200)
-  mockBroadcast({ type: 'metrics', value: mockResults.metrics })
-  mockBroadcast({ type: 'feedback', value: mockResults.feedback })
-  mockBroadcast({ type: 'lcd', value: `Score: ${mockResults.feedback.overall}/100` })
+  mockBroadcast({ type: 'metrics', value: mockResultsFull.metrics })
+  mockBroadcast({ type: 'feedback', value: mockResultsFull.feedback })
+  mockBroadcast({ type: 'lcd', value: `Score: ${mockResultsFull.feedback.overall}/100` })
   mockBroadcast({ type: 'state', value: 'speaking' })
   setTimeout(() => mockBroadcast({ type: 'state', value: 'idle' }), 1500)
   const session = mockSessions.find((s) => s.session_id === options.session_id)
   if (options.session_id && !session) throw new Error('Session not found')
-  if (session) session.results = mockResults
-  return { ...mockResults, session_id: session?.session_id ?? null, saved: !!session }
+  if (session) session.results = mockResultsFull
+  return { ...mockResultsFull, session_id: session?.session_id ?? null, saved: !!session }
 }
 
 // Mock data follows the real backend, plus the fields the backend does not return yet
 // (body_language, criteria, extra metrics) so the whole Results screen can be previewed.
-const mockResults: SessionResults = {
+const mockResultsFull: SessionResults = {
   transcript:
     "Um, so today I want to talk about, uh, why sleep matters. I think maybe the biggest reason is memory. Like, when you sleep, your brain replays the day. Um, students who sleep eight hours remember about forty percent more, uh, than students who don't. So tonight, try going to bed thirty minutes earlier.",
   metrics: {
@@ -215,4 +215,36 @@ const mockResults: SessionResults = {
       { id: 'evidence', category: 'persuasion', score: 6, detail: 'One claim only asserted', tip: 'Name where the forty percent comes from.' },
     ],
   },
+}
+
+// Second mock for the empty states: no camera (no eye_contact, posture, body_language) and
+// no script (no script_coverage). Scores are recomputed from the criteria that remain.
+const metricsNoCamera = { ...mockResultsFull.metrics }
+delete metricsNoCamera.eye_contact_pct
+delete metricsNoCamera.posture_alerts
+const mockResultsNoCamera: SessionResults = {
+  transcript: mockResultsFull.transcript,
+  metrics: metricsNoCamera,
+  feedback: {
+    ...mockResultsFull.feedback,
+    scores: { structure: 9, clarity: 6, delivery: 7, persuasion: 6, confidence: 6 },
+    overall: 72,
+    criteria: mockResultsFull.feedback.criteria?.filter(
+      (c) => c.id !== 'eye_contact' && c.id !== 'posture' && c.id !== 'script_coverage',
+    ),
+  },
+}
+
+// Third dev-only variant: no criteria array at all, so only the category scores exist.
+const mockResultsScoresOnly: SessionResults = {
+  ...mockResultsFull,
+  feedback: { ...mockResultsFull.feedback, criteria: undefined },
+}
+
+export type MockVariant = 'full' | 'no_camera' | 'scores_only'
+
+export const mockResultsByVariant: Record<MockVariant, SessionResults> = {
+  full: mockResultsFull,
+  no_camera: mockResultsNoCamera,
+  scores_only: mockResultsScoresOnly,
 }

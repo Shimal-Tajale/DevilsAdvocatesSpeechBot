@@ -13,7 +13,7 @@ export function TakeQuestionButton({ onTake }: TakeQuestionButtonProps) {
       <p className="font-semibold">Earnest has a question.</p>
       <Button
         onClick={onTake}
-        className="h-11 gap-2 rounded-full bg-plum px-5 text-base font-semibold text-warm hover:bg-plum/90"
+        className="h-11 gap-2 rounded-full bg-mode-strong px-5 text-base font-semibold text-on-mode-strong hover:bg-mode-strong/90"
       >
         <Hand className="size-5" aria-hidden />
         Take question

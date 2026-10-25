@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { createSession, postSpeech } from '@/api'
 import { Mascot } from '@/components/Mascot'
+import { ThemeToggle } from '@/components/ThemeToggle'
 import { VolumeMeter } from '@/components/VolumeMeter'
 import { Button } from '@/components/ui/button'
 import { useRecorder, type RecorderState } from '@/hooks/useRecorder'
@@ -15,7 +16,7 @@ const MIN_SECONDS = 5
 const PROGRESS_STEPS = ['Transcribing', 'Measuring', 'Writing feedback']
 
 const inputClass =
-  'h-11 rounded-2xl border-2 border-plum/15 bg-white px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40'
+  'h-11 rounded-2xl border-2 border-foreground/15 bg-card px-4 text-base outline-none focus-visible:border-mode-strong focus-visible:ring-3 focus-visible:ring-mode-strong/30'
 const bigButton = 'h-14 gap-2 rounded-full px-8 text-lg font-semibold'
 
 const MIC_HELP: Partial<Record<RecorderState, { title: string; body: string }>> = {
@@ -105,7 +106,7 @@ export default function Session({ mode }: { mode: ModeId }) {
       const result = await postSpeech(recording.blob, { session_id: sessionId.current, target_length_sec: targetSeconds })
       setAnalysis('done')
       const id = sessionId.current
-      navTimer.current = setTimeout(() => navigate(`/results/${id}`, { state: { result } }), 1200)
+      navTimer.current = setTimeout(() => navigate(`/results/${id}`, { state: { result, mode } }), 1200)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
       if (message === 'Session not found') sessionId.current = null // e.g. the server restarted
@@ -130,16 +131,22 @@ export default function Session({ mode }: { mode: ModeId }) {
   const shortRecording = recorder.recording ? recorder.recording.durationMs < MIN_SECONDS * 1000 : false
 
   return (
-    <div className="min-h-dvh bg-warm pb-10 text-plum">
+    <div data-mode={mode} className="page-mode min-h-dvh pb-10 text-foreground">
       <main className="mx-auto flex w-full max-w-xl flex-col items-center gap-5 px-4 py-6 text-center sm:px-6">
         <div className="flex w-full items-center justify-between text-sm font-semibold">
           <Link to="/" className="underline underline-offset-4">
             Back to home
           </Link>
-          <span className="rounded-full bg-white px-3 py-1">{config.title}</span>
+          <div className="flex items-center gap-2">
+            <span className="rounded-full bg-mode px-3 py-1 text-plum">{config.title}</span>
+            <ThemeToggle />
+          </div>
         </div>
 
-        <Mascot mood={mood} className={step === 'setup' ? 'w-40 sm:w-48' : 'w-56 sm:w-72'} />
+        <div className="relative">
+          <div aria-hidden className="absolute inset-x-4 top-12 bottom-0 rounded-full bg-mode-soft ring-4 ring-mode/60" />
+          <Mascot mood={mood} className={`relative ${step === 'setup' ? 'w-40 sm:w-48' : 'w-56 sm:w-72'}`} />
+        </div>
 
         {step === 'setup' ? (
           <form onSubmit={submitSetup} className="flex w-full flex-col gap-4 text-left" noValidate>
@@ -167,7 +174,7 @@ export default function Session({ mode }: { mode: ModeId }) {
                 {formError}
               </p>
             )}
-            <Button type="submit" className={`${bigButton} self-center bg-plum text-warm hover:bg-plum/90`}>
+            <Button type="submit" className={`${bigButton} self-center bg-mode-strong text-on-mode-strong hover:bg-mode-strong/90`}>
               Continue
             </Button>
           </form>
@@ -178,7 +185,7 @@ export default function Session({ mode }: { mode: ModeId }) {
                 {formatTime(recorder.elapsedMs)}
               </p>
               {targetSeconds && <p className="text-muted-foreground">of {formatTime(targetSeconds * 1000)} target</p>}
-              <p className="font-semibold">{topic.trim()}</p>
+              <p className="font-semibold text-mode-strong">{topic.trim()}</p>
             </div>
 
             <VolumeMeter level={recorder.level} active={recordingActive} />
@@ -187,10 +194,10 @@ export default function Session({ mode }: { mode: ModeId }) {
               <>
                 <p role="status">Press Start when you are ready. I will wait.</p>
                 <div className="flex flex-wrap justify-center gap-3">
-                  <Button onClick={recorder.start} className={`${bigButton} bg-plum text-warm hover:bg-plum/90`}>
+                  <Button onClick={recorder.start} className={`${bigButton} bg-mode-strong text-on-mode-strong hover:bg-mode-strong/90`}>
                     <Mic className="size-5" aria-hidden /> Start
                   </Button>
-                  <Button variant="outline" onClick={editDetails} className="h-14 rounded-full border-2 border-plum/20 bg-white px-6 text-base font-semibold">
+                  <Button variant="outline" onClick={editDetails} className="h-14 rounded-full border-2 border-foreground/20 bg-card px-6 text-base font-semibold">
                     Edit details
                   </Button>
                 </div>
@@ -226,7 +233,7 @@ export default function Session({ mode }: { mode: ModeId }) {
             )}
 
             {MIC_HELP[state] && (
-              <div role="alert" className="flex w-full flex-col items-center gap-3 rounded-3xl border-2 border-coral bg-white p-5">
+              <div role="alert" className="flex w-full flex-col items-center gap-3 rounded-3xl border-2 border-coral bg-card p-5">
                 <TriangleAlert className="size-6 text-coral" aria-hidden />
                 <h2 className="text-lg font-semibold">{MIC_HELP[state]!.title}</h2>
                 <p>{MIC_HELP[state]!.body}</p>
@@ -247,16 +254,16 @@ export default function Session({ mode }: { mode: ModeId }) {
                   </p>
                 )}
                 {analysis === 'failed' && (
-                  <div role="alert" className="flex w-full flex-col gap-1 rounded-3xl border-2 border-coral bg-white p-4 text-left">
+                  <div role="alert" className="flex w-full flex-col gap-1 rounded-3xl border-2 border-coral bg-card p-4 text-left">
                     <p className="font-semibold">The analysis did not work.</p>
                     <p>{analysisError}</p>
                   </div>
                 )}
                 <div className="flex flex-wrap justify-center gap-3">
-                  <Button variant="outline" onClick={reRecord} className="h-14 gap-2 rounded-full border-2 border-plum/20 bg-white px-6 text-base font-semibold">
+                  <Button variant="outline" onClick={reRecord} className="h-14 gap-2 rounded-full border-2 border-foreground/20 bg-card px-6 text-base font-semibold">
                     <RotateCcw className="size-5" aria-hidden /> Re-record
                   </Button>
-                  <Button onClick={analyze} className={`${bigButton} bg-mint text-plum hover:bg-mint/85`}>
+                  <Button onClick={analyze} className={`${bigButton} bg-mode text-plum hover:bg-mode/85`}>
                     {analysis === 'failed' ? 'Try again' : 'Analyze'}
                   </Button>
                 </div>
@@ -270,7 +277,7 @@ export default function Session({ mode }: { mode: ModeId }) {
                   const current = analysis === 'running' && i === progress
                   return (
                     <motion.li key={label} initial={{ opacity: 0.4 }} animate={{ opacity: finished || current ? 1 : 0.4 }} className="flex items-center gap-2 text-lg font-semibold">
-                      {finished ? <Check className="size-5 text-plum" aria-hidden /> : current ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <span className="size-5" />}
+                      {finished ? <Check className="size-5 text-foreground" aria-hidden /> : current ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <span className="size-5" />}
                       {label}
                       {current ? '...' : ''}
                     </motion.li>

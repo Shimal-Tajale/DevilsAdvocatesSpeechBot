@@ -23,14 +23,14 @@ export function AlertToaster({ toasts, onDismiss }: AlertToasterProps) {
             initial={{ opacity: 0, y: -12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -12 }}
-            className="pointer-events-auto flex max-w-sm items-center gap-3 rounded-full border-2 border-coral bg-white py-2 pr-2 pl-4 font-semibold text-plum shadow-[0_6px_0_0_rgba(43,33,64,0.08)]"
+            className="pointer-events-auto flex max-w-sm items-center gap-3 rounded-full border-2 border-coral bg-card py-2 pr-2 pl-4 font-semibold text-plum shadow-[0_6px_0_0_rgba(43,33,64,0.08)]"
           >
             <span>{ALERT_MESSAGE[toast.kind]}</span>
             <button
               type="button"
               onClick={() => onDismiss(toast.id)}
               aria-label="Dismiss"
-              className="flex size-7 items-center justify-center rounded-full hover:bg-plum/10 focus-visible:outline-2 focus-visible:outline-ring"
+              className="flex size-7 items-center justify-center rounded-full hover:bg-foreground/10 focus-visible:outline-2 focus-visible:outline-ring"
             >
               <X className="size-4" aria-hidden />
             </button>
