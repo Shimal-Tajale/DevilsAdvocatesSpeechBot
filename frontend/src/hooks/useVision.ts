@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { initializeVision } from '@/vision'
+import { RECORDING_POSTURE_ANALYSIS } from '@/vision/sensitivity'
 import type { AlertValue, AnalysisStatus, CalibrationBlocker, VisionController } from '@/vision'
 import type { AlertDetail, VisionStats } from '@/types'
 
@@ -24,6 +25,8 @@ let shared: Promise<VisionController> | null = null
 function loadVision() {
   shared ??= initializeVision({
     ...ASSETS,
+    analysis: RECORDING_POSTURE_ANALYSIS, // Kundansai's tuning for recordings
+
     onAlert: (event) => handlers.alert(event.value),
     onStatus: (status) => handlers.status(status),
     onError: (error) => console.error('Vision processing stopped', error),
