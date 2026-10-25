@@ -66,6 +66,17 @@ export function getHistory(speaker: string): Promise<Session[]> {
 export interface PostSpeechOptions {
   session_id?: string // saves the results on that session (404 if it does not exist)
   vision?: VisionStats // the browser's tally of vision alerts, merged into the metrics
+  target_length_sec?: number // sent along, but the backend does not read it yet
+}
+
+// File extension that matches a recording's real MIME type (Safari records mp4, others webm or ogg).
+function extensionFor(mime: string): string {
+  const type = mime.split(';')[0].trim().toLowerCase()
+  if (type.includes('mp4')) return 'mp4'
+  if (type.includes('ogg')) return 'ogg'
+  if (type.includes('wav')) return 'wav'
+  if (type.includes('mpeg')) return 'mp3'
+  return 'webm'
 }
 
 // POST /speech (multipart: file field "audio", optional form fields "session_id" and
@@ -74,9 +85,10 @@ export interface PostSpeechOptions {
 export function postSpeech(audio: Blob, options: PostSpeechOptions = {}): Promise<SpeechResponse> {
   if (!features.useMocks) {
     const form = new FormData()
-    form.append('audio', audio, 'speech.webm')
+    form.append('audio', audio, `speech.${extensionFor(audio.type)}`)
     if (options.session_id) form.append('session_id', options.session_id)
     if (options.vision) form.append('vision', JSON.stringify(options.vision))
+    if (options.target_length_sec) form.append('target_length_sec', String(options.target_length_sec))
     return http<SpeechResponse>('/speech', { method: 'POST', body: form })
   }
   return mockSpeechRun(options)

@@ -63,7 +63,7 @@ export default function Results() {
   if (!result) {
     return (
       <main className="mx-auto flex min-h-dvh max-w-2xl flex-col items-center justify-center gap-4 p-6 text-center text-plum">
-        <Mascot mood={canFetchMock ? 'thinking' : error ? 'confused' : 'idle'} className="w-40" />
+        <Mascot mood={canFetchMock ? 'thinking' : 'idle'} className="w-40" />
         <h1 className="text-2xl font-semibold">
           {canFetchMock ? 'Earnest is reading your speech...' : (error ?? 'No results to show yet')}
         </h1>
