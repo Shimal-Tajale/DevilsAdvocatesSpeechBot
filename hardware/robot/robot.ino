@@ -29,6 +29,7 @@ const unsigned long FLASH_MS    = 250;
 const unsigned long BUTTON_COOLDOWN_MS = 5000;
 
 const int IDLE_WHITE = 255;   // idle LED brightness, 0-255; lower if too bright
+const unsigned long THINK_FLASH_MS = 400;   // yellow on/off while the speech is analysed
 
 // ---------- State ----------
 enum State { IDLE, LISTENING, THINKING, SPEAKING };
@@ -47,6 +48,9 @@ unsigned long beepUntil = 0;
 
 bool lastButton = HIGH;
 unsigned long lastArrival = 0;
+
+bool thinkOn = false;
+unsigned long nextThink = 0;
 
 // ---------- Helpers ----------
 void setColor(int r, int g, int b) {
@@ -82,7 +86,10 @@ void applyState() {
   switch (state) {
     case IDLE:      setColor(IDLE_WHITE, IDLE_WHITE, IDLE_WHITE); break;   // white
     case LISTENING: setColor(0, 0, 255);   break;   // blue
-    case THINKING:  setColor(255, 140, 0); break;   // yellow
+    case THINKING:  setColor(255, 140, 0);          // yellow, flashing (see loop())
+                    thinkOn = true;
+                    nextThink = millis() + THINK_FLASH_MS;
+                    break;
     case SPEAKING:  setColor(0, 255, 0);   break;   // green
   }
   drawStatus();
@@ -186,6 +193,13 @@ void loop() {
       nextFlash = now + FLASH_MS;
     }
     if (now >= alertUntil) endAlert();
+  }
+  // Thinking: flash yellow so it reads as busy (paused during alerts)
+  else if (state == THINKING && now >= nextThink) {
+    thinkOn = !thinkOn;
+    if (thinkOn) setColor(255, 140, 0);
+    else         setColor(0, 0, 0);
+    nextThink = now + THINK_FLASH_MS;
   }
 
   // Button: send P:1 once per press (stands in for the PIR)

@@ -6,7 +6,26 @@ import { TakeQuestionButton } from '@/components/TakeQuestionButton'
 import { Button } from '@/components/ui/button'
 import { useRecorder } from '@/hooks/useRecorder'
 import { scoreLabel } from '@/lib/scoring'
-import type { AnswerResult, AudienceQuestion } from '@/types'
+import type { AnswerResult, AudienceQuestion, ModeId } from '@/types'
+
+// The same flow in every mode; only the words change (the backend picks the prompt).
+const COPY: Record<ModeId, {
+  heading: string; working: string; about: string; asked: string; answer: string; yours: string
+}> = {
+  presentation: {
+    heading: 'A question from the audience', working: 'Earnest is checking one of your claims...',
+    about: 'About', asked: 'Earnest asked', answer: 'Answer it', yours: 'Your answer',
+  },
+  debate: {
+    heading: "Your opponent's counter-argument", working: 'Earnest is building the case against you...',
+    about: 'Your position', asked: 'Earnest argued', answer: 'Rebut it', yours: 'Your rebuttal',
+  },
+  interview: {
+    heading: 'An interview question', working: 'Earnest is thinking of a question about you...',
+    about: 'Probing', asked: 'Earnest asked', answer: 'Answer it', yours: 'Your answer',
+  },
+}
+type Copy = (typeof COPY)[ModeId]
 
 // The browser's voice: the design doc's text-to-speech fallback.
 function speak(text: string) {
@@ -21,7 +40,7 @@ const pill = 'h-11 gap-2 self-start rounded-full px-5 text-base font-semibold'
 
 // Answer the question once: record, stop, rate. Re-recording is only offered if the
 // rating failed (e.g. no speech was heard), not after a score.
-function AnswerBox({ sessionId, asked }: { sessionId: string; asked: AudienceQuestion }) {
+function AnswerBox({ sessionId, asked, copy }: { sessionId: string; asked: AudienceQuestion; copy: Copy }) {
   const recorder = useRecorder()
   const [rating, setRating] = useState<'idle' | 'rating' | 'failed'>('idle')
   const [result, setResult] = useState<AnswerResult | null>(null)
@@ -51,7 +70,7 @@ function AnswerBox({ sessionId, asked }: { sessionId: string; asked: AudienceQue
     const { score, answered, did_well, improve } = result.rating
     return (
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-2 border-t border-foreground/10 pt-3">
-        <h3 className="font-semibold">Your answer</h3>
+        <h3 className="font-semibold">{copy.yours}</h3>
         <p className="font-heading text-3xl font-semibold">
           {score}/10 <span className="text-base font-semibold text-muted-foreground">{scoreLabel(score)}</span>
         </p>
@@ -69,7 +88,7 @@ function AnswerBox({ sessionId, asked }: { sessionId: string; asked: AudienceQue
         </p>
         <dl className="flex flex-col gap-2 rounded-2xl bg-card p-3 text-sm" aria-label="Transcript of the question and your answer">
           <div>
-            <dt className="font-semibold">Earnest asked</dt>
+            <dt className="font-semibold">{copy.asked}</dt>
             <dd>{asked.question}</dd>
           </div>
           <div>
@@ -83,10 +102,10 @@ function AnswerBox({ sessionId, asked }: { sessionId: string; asked: AudienceQue
 
   return (
     <div className="flex flex-col gap-2 border-t border-foreground/10 pt-3">
-      <h3 className="font-semibold">Your answer</h3>
+      <h3 className="font-semibold">{copy.yours}</h3>
       {state === 'idle' && (
         <Button onClick={start} className={`${pill} bg-mode-strong text-on-mode-strong hover:bg-mode-strong/90`}>
-          <Mic className="size-5" aria-hidden /> Answer it
+          <Mic className="size-5" aria-hidden /> {copy.answer}
         </Button>
       )}
       {state === 'requesting' && <p role="status">Waiting for microphone permission...</p>}
@@ -135,7 +154,8 @@ function AnswerBox({ sessionId, asked }: { sessionId: string; asked: AudienceQue
 
 // After a speech the backend raises Earnest's hand (and the robot's). Calling on it
 // runs one web search and shows a question about a claim from the speech, with its source.
-export function QuestionCard({ sessionId }: { sessionId: string }) {
+export function QuestionCard({ sessionId, mode }: { sessionId: string; mode: ModeId }) {
+  const copy = COPY[mode] ?? COPY.presentation
   const [phase, setPhase] = useState<Phase>('waiting')
   const [asked, setAsked] = useState<AudienceQuestion | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -157,14 +177,14 @@ export function QuestionCard({ sessionId }: { sessionId: string }) {
   return (
     <section aria-labelledby="question-heading" className="flex flex-col gap-3 rounded-3xl border-2 border-mode bg-mode-soft p-5">
       <h2 id="question-heading" className="text-xl font-semibold">
-        A question from the audience
+        {copy.heading}
       </h2>
 
       {phase === 'waiting' && <TakeQuestionButton onTake={take} />}
 
       {phase === 'asking' && (
         <p role="status" className="flex items-center gap-2 font-semibold">
-          <Loader2 className="size-5 animate-spin" aria-hidden /> Earnest is checking one of your claims...
+          <Loader2 className="size-5 animate-spin" aria-hidden /> {copy.working}
         </p>
       )}
 
@@ -180,7 +200,9 @@ export function QuestionCard({ sessionId }: { sessionId: string }) {
       {phase === 'asked' && asked && (
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-3">
           <blockquote className="font-heading text-lg">&ldquo;{asked.question}&rdquo;</blockquote>
-          <p className="text-sm text-muted-foreground">About: {asked.claim}</p>
+          <p className="text-sm text-muted-foreground">
+            {copy.about}: {asked.claim}
+          </p>
           {asked.source && (
             <a
               href={asked.source.url}
@@ -198,7 +220,7 @@ export function QuestionCard({ sessionId }: { sessionId: string }) {
           <Button variant="outline" onClick={() => speak(asked.question)} className="h-10 gap-2 self-start rounded-full border-2 border-foreground/20 bg-card px-5 font-semibold">
             <Volume2 className="size-4" aria-hidden /> Hear it again
           </Button>
-          <AnswerBox sessionId={sessionId} asked={asked} />
+          <AnswerBox sessionId={sessionId} asked={asked} copy={copy} />
         </motion.div>
       )}
     </section>
