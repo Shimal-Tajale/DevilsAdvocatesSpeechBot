@@ -13,6 +13,8 @@ import { useLiveEvents } from '@/hooks/useLiveEvents'
 import { useRecorder, type RecorderState } from '@/hooks/useRecorder'
 import { useSpeaker } from '@/hooks/useSpeaker'
 import { useVision, type VisionState } from '@/hooks/useVision'
+import { detectorFeedback, VISION_FEEDBACK_LABELS } from '@/vision/feedback'
+import { ALERT_DETAIL_MESSAGE, ALERT_MESSAGE } from '@/lib/alerts'
 import type { CalibrationBlocker } from '@/vision'
 import { MODES } from '@/modes'
 import type { AlertDetail, Mood, ModeId, VisionStats } from '@/types'
@@ -95,6 +97,7 @@ export default function Session({ mode }: { mode: ModeId }) {
   const config = MODES.find((m) => m.id === mode)!
   const navigate = useNavigate()
   const recorder = useRecorder()
+  const [showSkeleton, setShowSkeleton] = useState(true)
   const [speaker, setSpeaker] = useSpeaker()
   const [topic, setTopic] = useState('')
   const [targetMinutes, setTargetMinutes] = useState('')
@@ -119,6 +122,9 @@ export default function Session({ mode }: { mode: ModeId }) {
     state: visionState,
     calibration,
     videoRef,
+    canvasRef,
+    status: visionStatus,
+    lastAlert: lastVisionAlert,
     record: visionRecord,
     pause: visionPause,
     stop: visionStop,
@@ -325,18 +331,25 @@ export default function Session({ mode }: { mode: ModeId }) {
             <VolumeMeter level={recorder.level} active={recordingActive} />
 
             {/* Always mounted so the analysis has a video element; shown once the camera starts. */}
-            <div className={visionState === 'off' ? 'hidden' : 'flex flex-col items-center gap-2'}>
+            <div className={visionState === 'off' ? 'hidden' : 'flex w-full max-w-sm flex-col items-center gap-2'}>
+              <div className={features.cameraPreview && visionState !== 'unavailable' ? 'relative aspect-[4/3] w-full overflow-hidden rounded-2xl border-2 border-foreground/15 bg-foreground/5' : 'sr-only'}>
               <video
                 ref={videoRef}
                 muted
                 playsInline
                 aria-label="Camera preview"
-                className={
-                  features.cameraPreview && visionState !== 'unavailable'
-                    ? 'w-40 -scale-x-100 rounded-2xl border-2 border-foreground/15 bg-foreground/5 sm:w-48'
-                    : 'sr-only'
-                }
+                className="absolute inset-0 h-full w-full -scale-x-100 object-contain"
               />
+              <canvas ref={canvasRef} aria-hidden="true" className={`pointer-events-none absolute inset-0 h-full w-full -scale-x-100 ${showSkeleton ? '' : 'invisible'}`} />
+              </div>
+              {features.cameraPreview && visionState !== 'unavailable' && <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
+                <input type="checkbox" checked={showSkeleton} onChange={event => setShowSkeleton(event.target.checked)} className="size-4 accent-current" />
+                Show skeleton
+              </label>}
+              <p role="status" className="text-sm font-semibold">
+                {recorder.state === 'paused' ? 'Paused' : visionState === 'unavailable' || (visionStatus && (visionStatus.measurements.torsoHeight == null || visionStatus.measurements.bodyX == null))
+                  ? 'Tracking unavailable' : visionState === 'watching' ? 'Ready' : `Calibrating · ${calibration.percent}%`}
+              </p>
               {visionState === 'calibrating' ? (
                 <p role="status" className="text-sm text-muted-foreground">
                   {calibration.blocker
@@ -350,6 +363,25 @@ export default function Session({ mode }: { mode: ModeId }) {
                   </p>
                 )
               )}
+              <ul className="grid w-full grid-cols-1 gap-1 text-left text-sm sm:grid-cols-2" aria-label="Live vision detections">
+                {VISION_FEEDBACK_LABELS.map(([key, label]) => {
+                  const display = visionState === 'unavailable' ? 'Tracking unavailable' : detectorFeedback(visionStatus, key, recorder.state === 'paused')
+                  return <li key={key} title={visionStatus?.debug?.detectors[key]?.reason} className={`rounded-xl px-2 py-1 ${display === 'Detected' ? 'bg-butter/20 font-semibold' : 'bg-foreground/5'}`}>
+                    {label}: {display}
+                  </li>
+                })}
+              </ul>
+              <p className="text-xs text-muted-foreground">Head orientation is relative to calibration, not eye tracking. Live detections precede sustained alerts and their cooldown.</p>
+              {visionStatus?.calibrated && <details className="w-full text-left text-xs text-muted-foreground">
+                <summary className="cursor-pointer">Tracking details</summary>
+                <p>Torso drop: {visionStatus.diagnostics?.torsoDrop == null ? 'unavailable' : `${Math.round(visionStatus.diagnostics.torsoDrop * 100)}%`}. Sway reversals: {visionStatus.diagnostics?.torsoReversals ?? 0}/3. Wrist reversals: {visionStatus.diagnostics?.wristReversals ?? 0}/6.</p>
+                <p>Left hand: {visionStatus.debug?.wristEvidence?.left.reason ?? 'Waiting for evidence'}</p>
+                <p>Right hand: {visionStatus.debug?.wristEvidence?.right.reason ?? 'Waiting for evidence'}</p>
+                <p>Keep hips and hands visible. Sway/fidget needs about 5 seconds of motion history, then sustained evidence.</p>
+              </details>}
+              {lastVisionAlert && <p role="status" className="w-full rounded-xl bg-coral/15 px-3 py-2 text-sm font-semibold">
+                Last emitted alert: {lastVisionAlert.detail ? ALERT_DETAIL_MESSAGE[lastVisionAlert.detail] : ALERT_MESSAGE[lastVisionAlert.value]}
+              </p>}
             </div>
 
             {analysis === 'idle' && state === 'idle' && !upload && (

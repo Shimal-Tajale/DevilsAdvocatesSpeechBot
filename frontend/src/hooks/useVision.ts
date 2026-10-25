@@ -3,6 +3,8 @@ import { initializeVision } from '@/vision'
 import { RECORDING_POSTURE_ANALYSIS } from '@/vision/sensitivity'
 import type { AlertValue, AnalysisStatus, CalibrationBlocker, VisionController } from '@/vision'
 import type { AlertDetail, VisionStats } from '@/types'
+import type { LandmarkFrame } from '@/vision'
+import { LandmarkOverlay } from '@/vision/demo/overlay'
 
 // Same version as the npm package. Loaded from Google's CDN so no model files
 // live in the repo; the app needs internet for Deepgram and Gemini anyway.
@@ -19,6 +21,7 @@ const ASSETS = {
 const handlers = {
   alert: (_value: AlertValue) => {},
   status: (_status: AnalysisStatus) => {},
+  landmarks: (_frame: LandmarkFrame) => {},
 }
 let shared: Promise<VisionController> | null = null
 
@@ -29,6 +32,7 @@ function loadVision() {
 
     onAlert: (event) => handlers.alert(event.value),
     onStatus: (status) => handlers.status(status),
+    onLandmarks: (frame) => handlers.landmarks(frame),
     onError: (error) => console.error('Vision processing stopped', error),
   }).catch((error) => {
     shared = null // let the next session try again
@@ -78,6 +82,11 @@ export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => 
   const [calibration, setCalibration] = useState<Calibration>({ blocker: null, percent: 0 })
   const lastCalibration = useRef('')
   const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const overlay = useRef<LandmarkOverlay | null>(null)
+  const [status, setStatus] = useState<AnalysisStatus | null>(null)
+  const [lastAlert, setLastAlert] = useState<{ value: AlertValue; detail?: AlertDetail } | null>(null)
+  const lastDisplay = useRef(-Infinity)
   const stream = useRef<MediaStream | null>(null)
   const controller = useRef<VisionController | null>(null)
   const active = useRef(false) // between record() and stop()
@@ -91,6 +100,8 @@ export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => 
   })
 
   const release = useCallback(() => {
+    overlay.current?.cleanup()
+    overlay.current = null
     controller.current?.stop()
     controller.current = null
     stream.current?.getTracks().forEach((track) => track.stop())
@@ -105,16 +116,35 @@ export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => 
     lastCalibration.current = ''
     setCalibration({ blocker: null, percent: 0 })
     setState('loading')
+    setStatus(null)
+    setLastAlert(null)
+    lastDisplay.current = -Infinity
 
     handlers.alert = (value) => {
       if (!counting.current) return
       const detail = detailFor(value, behaviors.current)
       tally.current[value] += 1
       if (detail) tally.current[detail] += 1
+      setLastAlert({ value, detail })
       onAlertRef.current(value, detail)
     }
+    handlers.landmarks = (frame) => {
+      if (!active.current || !canvasRef.current) return
+      try {
+        overlay.current ??= new LandmarkOverlay(canvasRef.current)
+        overlay.current.update(frame)
+      } catch (error) {
+        // A drawing failure must not stop inference, scoring or event forwarding.
+        console.warn('Vision overlay unavailable', error)
+      }
+    }
     handlers.status = (status) => {
+      if (!active.current) return
       behaviors.current = status.behaviors
+      if (performance.now() - lastDisplay.current >= 150) {
+        lastDisplay.current = performance.now()
+        setStatus(status)
+      }
       if (!status.calibrated) {
         const blocker = BLOCKER_ORDER.find((b) => status.calibrationBlockers.includes(b)) ?? null
         const percent = Math.floor(status.calibrationProgress * 5) * 20
@@ -202,5 +232,5 @@ export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => 
     [release],
   )
 
-  return { state, calibration, videoRef, record, pause, stop }
+  return { state, calibration, videoRef, canvasRef, status, lastAlert, record, pause, stop }
 }
