@@ -1,4 +1,5 @@
-import { motion, useReducedMotion } from 'framer-motion'
+import { motion, useMotionValue, useReducedMotion, useSpring } from 'framer-motion'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Mood } from '@/types'
 
 // Earnest the bunny. The `mood` prop is the only thing that drives the animation.
@@ -19,6 +20,7 @@ interface MoodSpec {
   armL: number
   armR: number
   pupil: [number, number]
+  pupilR?: [number, number] // the right eye, when it should look different from the left
   eyeOpen: number // 0..1
   mouth: { w: number; e: number; u: number; l: number }
   body: { y: number; rotate: number; scale: number }
@@ -35,6 +37,38 @@ const SPECS: Record<Mood, MoodSpec> = {
   thinking: { earL: -4, earR: 24, earScale: 1, armL: 12, armR: -12, pupil: [5, -5], eyeOpen: 1, mouth: { w: 6, e: 154, u: 154, l: 156 }, body: { y: 0, rotate: -3, scale: 1 } },
 }
 
+// Silly faces and poses, played for a moment when Earnest is clicked. They sit on top of the
+// current mood and then it goes back to normal.
+interface Face {
+  spec: Partial<MoodSpec>
+  closedL?: boolean
+  closedR?: boolean
+  tongue?: boolean
+  puffed?: boolean
+  spin?: boolean
+}
+
+const FACE_MS = 1800
+
+const FACES: Face[] = [
+  // tongue out, ears flopped wide
+  { tongue: true, spec: { earL: -38, earR: 38, pupil: [0, -3], mouth: { w: 14, e: 150, u: 152, l: 172 }, armL: 40, armR: -40, body: { y: -4, rotate: 0, scale: 1 } } },
+  // cross-eyed and wobbly
+  { spec: { pupil: [5, 1], pupilR: [-5, 1], earL: -62, earR: 22, mouth: { w: 8, e: 154, u: 150, l: 162 }, body: { y: 0, rotate: -6, scale: 1 } } },
+  // big surprise
+  { spec: { earL: 0, earR: 0, earScale: 1.25, eyeOpen: 1.2, pupil: [0, 0], mouth: { w: 6, e: 150, u: 142, l: 182 }, armL: 70, armR: -70, body: { y: -12, rotate: 0, scale: 1.04 } } },
+  // wink with a wave
+  { closedR: true, spec: { earL: -6, earR: 28, pupil: [0, 0], mouth: { w: 12, e: 150, u: 156, l: 168 }, armR: -150, body: { y: -3, rotate: 3, scale: 1 } } },
+  // puffed cheeks
+  { puffed: true, spec: { earL: -20, earR: 20, eyeOpen: 0.55, pupil: [0, 2], mouth: { w: 4, e: 154, u: 152, l: 156 }, body: { y: 0, rotate: 0, scale: 1.05 } } },
+  // happy spin
+  { spin: true, spec: { earL: -22, earR: 22, mouth: { w: 14, e: 149, u: 151, l: 174 }, armL: 70, armR: -70, body: { y: -6, rotate: 0, scale: 1 } } },
+]
+
+// Moods where the eyes follow the cursor. The others have a gaze that is part of the expression.
+const TRACKING_MOODS: Mood[] = ['idle', 'listening', 'happy', 'speaking', 'handRaised']
+const MAX_LOOK = { x: 4, y: 4.5 }
+
 const mouthPath = ({ w, e, u, l }: MoodSpec['mouth']) =>
   `M ${120 - w} ${e} Q 120 ${u} ${120 + w} ${e} Q 120 ${l} ${120 - w} ${e} Z`
 
@@ -45,15 +79,72 @@ const spring = { type: 'spring' as const, stiffness: 170, damping: 15 }
 
 interface MascotProps {
   mood: Mood
+  /** Clicking makes Earnest pull a silly face. Turn off where a click should do nothing. */
+  playful?: boolean
   /** CSS size of the square-ish SVG; defaults to fill its container width. */
   className?: string
   /** When set, the mascot renders as a button (e.g. "call on them"). */
   onClick?: () => void
 }
 
-export function Mascot({ mood, className, onClick }: MascotProps) {
+export function Mascot({ mood: moodProp, playful = true, className, onClick }: MascotProps) {
   const reduce = useReducedMotion()
-  const spec = SPECS[mood]
+  const [face, setFace] = useState<{ face: Face; key: number } | null>(null)
+  const faceTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const lastFace = useRef(-1)
+  const faceCount = useRef(0)
+  // While a silly face plays, the loops and props behave like idle.
+  const mood: Mood = face ? 'idle' : moodProp
+  const spec: MoodSpec = face ? { ...SPECS.idle, ...face.face.spec } : SPECS[mood]
+
+  const playFace = useCallback(() => {
+    let index = Math.floor(Math.random() * FACES.length)
+    if (index === lastFace.current) index = (index + 1) % FACES.length
+    lastFace.current = index
+    faceCount.current += 1
+    setFace({ face: FACES[index], key: faceCount.current })
+    clearTimeout(faceTimer.current)
+    faceTimer.current = setTimeout(() => setFace(null), FACE_MS)
+  }, [])
+  useEffect(() => () => clearTimeout(faceTimer.current), [])
+
+  // Eye tracking: the pupils follow the cursor. The motion values move the pupils without
+  // re-rendering the mascot on every pointer event.
+  const svgRef = useRef<SVGSVGElement>(null)
+  const pointer = useRef<{ x: number; y: number } | null>(null)
+  const aimX = useMotionValue(0)
+  const aimY = useMotionValue(0)
+  const lookX = useSpring(aimX, { stiffness: 260, damping: 28 })
+  const lookY = useSpring(aimY, { stiffness: 260, damping: 28 })
+  const tracking = !reduce && !face && TRACKING_MOODS.includes(mood)
+
+  useEffect(() => {
+    const aim = () => {
+      const svg = svgRef.current
+      if (!tracking || !svg || !pointer.current) {
+        aimX.set(0)
+        aimY.set(0)
+        return
+      }
+      const box = svg.getBoundingClientRect()
+      // The eyes sit at about (120, 125) in the 320 x 290 view box that starts at (-40, -30).
+      const eyeX = box.left + ((120 + 40) / 320) * box.width
+      const eyeY = box.top + ((125 + 30) / 290) * box.height
+      const dx = pointer.current.x - eyeX
+      const dy = pointer.current.y - eyeY
+      const distance = Math.hypot(dx, dy) || 1
+      const strength = Math.min(1, distance / (box.width * 0.5))
+      aimX.set((dx / distance) * strength * MAX_LOOK.x)
+      aimY.set((dy / distance) * strength * MAX_LOOK.y)
+    }
+    const onMove = (event: PointerEvent) => {
+      pointer.current = { x: event.clientX, y: event.clientY }
+      aim()
+    }
+    aim()
+    window.addEventListener('pointermove', onMove)
+    return () => window.removeEventListener('pointermove', onMove)
+  }, [tracking, aimX, aimY])
   const tr = reduce ? { duration: 0 } : spring
 
   // Gentle always-on bob. It lives on its own group so its looping transition
@@ -80,7 +171,8 @@ export function Mascot({ mood, className, onClick }: MascotProps) {
       ? { duration: YAWN_SECONDS, repeat: Infinity, ease: 'easeInOut' as const, times: YAWN_TIMES }
       : tr
   // Eyes squeeze shut mid-yawn, then drift back up to the sky.
-  const eyeScale = mood === 'happy' ? 0 : bored ? [0.9, 0.9, 0.1, 0.1, 0.9, 0.9] : spec.eyeOpen
+  const eyeScale = bored ? [0.9, 0.9, 0.1, 0.1, 0.9, 0.9] : spec.eyeOpen
+  const eyeClosed = (cx: number) => mood === 'happy' || (cx === 96 ? face?.face.closedL : face?.face.closedR) === true
   const eyeTransition = bored
     ? { duration: YAWN_SECONDS, repeat: Infinity, ease: 'easeInOut' as const, times: YAWN_TIMES }
     : tr
@@ -92,7 +184,14 @@ export function Mascot({ mood, className, onClick }: MascotProps) {
       aria-label={`Earnest the bunny, looking ${mood === 'handRaised' ? 'like they have a question' : mood}`}
       className={className}
       overflow="visible"
+      ref={svgRef}
     >
+      <motion.g
+        key={face?.face.spin ? face.key : 'steady'}
+        initial={{ rotate: 0 }}
+        animate={face?.face.spin && !reduce ? { rotate: 360, transition: { duration: 0.9, ease: 'easeInOut' } } : { rotate: 0, transition: { duration: 0 } }}
+        style={pivot(0.5, 0.6)}
+      >
       <motion.g
         initial={false}
         animate={spec.body}
@@ -144,8 +243,21 @@ export function Mascot({ mood, className, onClick }: MascotProps) {
         />
 
         {/* cheeks and nose */}
-        <ellipse cx="76" cy="150" rx="11" ry="7" fill={CORAL} opacity="0.4" />
-        <ellipse cx="164" cy="150" rx="11" ry="7" fill={CORAL} opacity="0.4" />
+        {[76, 164].map((cx) => (
+          <motion.ellipse
+            key={cx}
+            cx={cx}
+            cy="150"
+            rx="11"
+            ry="7"
+            fill={CORAL}
+            opacity="0.4"
+            initial={false}
+            animate={{ scale: face?.face.puffed ? 1.7 : 1 }}
+            transition={tr}
+            style={pivot(0.5, 0.5)}
+          />
+        ))}
         <ellipse cx="120" cy="143" rx="5.5" ry="4" fill={CORAL} />
 
         {/* eyes */}
@@ -153,7 +265,7 @@ export function Mascot({ mood, className, onClick }: MascotProps) {
           <g key={cx}>
             <motion.g
               initial={false}
-              animate={{ scaleY: eyeScale }}
+              animate={{ scaleY: eyeClosed(cx) ? 0 : eyeScale }}
               transition={eyeTransition}
               style={pivot(0.5, 0.5)}
             >
@@ -163,9 +275,15 @@ export function Mascot({ mood, className, onClick }: MascotProps) {
                 style={pivot(0.5, 0.5)}
               >
                 <ellipse cx={cx} cy="124" rx="13" ry="16" fill={WARM} />
-                <motion.g initial={false} animate={{ x: spec.pupil[0], y: spec.pupil[1] }} transition={tr}>
-                  <ellipse cx={cx} cy="125" rx="9" ry="12" fill={PLUM} />
-                  <circle cx={cx + 3} cy="120" r="3.2" fill={WARM} />
+                <motion.g style={{ x: lookX, y: lookY }}>
+                  <motion.g
+                    initial={false}
+                    animate={{ x: (cx === 96 ? spec.pupil : (spec.pupilR ?? spec.pupil))[0], y: (cx === 96 ? spec.pupil : (spec.pupilR ?? spec.pupil))[1] }}
+                    transition={tr}
+                  >
+                    <ellipse cx={cx} cy="125" rx="9" ry="12" fill={PLUM} />
+                    <circle cx={cx + 3} cy="120" r="3.2" fill={WARM} />
+                  </motion.g>
                 </motion.g>
               </motion.g>
             </motion.g>
@@ -177,7 +295,7 @@ export function Mascot({ mood, className, onClick }: MascotProps) {
               strokeWidth="4.5"
               strokeLinecap="round"
               initial={false}
-              animate={{ opacity: mood === 'happy' ? 1 : 0 }}
+              animate={{ opacity: eyeClosed(cx) ? 1 : 0 }}
               transition={tr}
             />
           </g>
@@ -194,12 +312,25 @@ export function Mascot({ mood, className, onClick }: MascotProps) {
           initial={false}
           animate={{ d: mouthD }}
           transition={mouthTransition}
-          fill={mood === 'speaking' || mood === 'happy' || mood === 'handRaised' ? '#7A3F5E' : PLUM}
+          fill={face || mood === 'speaking' || mood === 'happy' || mood === 'handRaised' ? '#7A3F5E' : PLUM}
           stroke={PLUM}
           strokeWidth="3.5"
           strokeLinejoin="round"
         />
+        <motion.ellipse
+          cx="120"
+          cy="166"
+          rx="8"
+          ry="10"
+          fill={CORAL}
+          initial={false}
+          animate={{ opacity: face?.face.tongue ? 1 : 0, scaleY: face?.face.tongue ? 1 : 0 }}
+          transition={tr}
+          style={pivot(0.5, 0)}
+        />
         </motion.g>
+      </motion.g>
+
       </motion.g>
 
       {/* mood props above the head */}
@@ -207,13 +338,18 @@ export function Mascot({ mood, className, onClick }: MascotProps) {
     </svg>
   )
 
-  if (!onClick) return art
+  const buttonClass =
+    'cursor-pointer rounded-3xl focus-visible:outline-3 focus-visible:outline-offset-4 focus-visible:outline-[#7C5CE0]'
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={buttonClass}>
+        {art}
+      </button>
+    )
+  }
+  if (!playful) return art
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="cursor-pointer rounded-3xl focus-visible:outline-3 focus-visible:outline-offset-4 focus-visible:outline-[#7C5CE0]"
-    >
+    <button type="button" onClick={playFace} aria-label="Tickle Earnest" className={buttonClass}>
       {art}
     </button>
   )

@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion'
+import { Ear } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { AlertToaster } from '@/components/AlertToaster'
@@ -49,13 +50,19 @@ export default function Home() {
   return (
     <div className="page-home min-h-dvh pb-32 text-foreground">
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-4 py-6 sm:px-6 sm:py-10">
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between">
+          <p className="flex items-center gap-2 font-heading text-2xl font-semibold">
+            <span className="flex size-9 items-center justify-center rounded-full bg-lavender text-plum">
+              <Ear className="size-5" aria-hidden />
+            </span>
+            All Ears
+          </p>
           <ThemeToggle />
         </div>
         <header className="flex flex-col items-center gap-2 text-center md:flex-row md:gap-8 md:text-left">
           <Mascot mood={mood} onClick={handRaised ? takeQuestion : undefined} className="w-48 shrink-0 sm:w-60 md:w-64" />
           <div className="flex flex-col items-center gap-3 md:items-start">
-            <p className="font-heading text-sm font-medium uppercase tracking-widest text-foreground/60">Speech coach</p>
+            <p className="font-heading text-sm font-medium uppercase tracking-widest text-foreground/60">Your speech coach</p>
             <motion.div
               key={GREETING[permission]}
               initial={{ opacity: 0, y: 6 }}

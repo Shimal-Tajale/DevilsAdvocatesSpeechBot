@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Check, Loader2, Mic, Pause, Play, RotateCcw, Square, TriangleAlert } from 'lucide-react'
+import { Check, Loader2, Mic, Pause, Play, RotateCcw, Square, TriangleAlert, Upload } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { createSession, postSpeech } from '@/api'
@@ -18,6 +18,7 @@ import { MODES } from '@/modes'
 import type { Mood, ModeId, VisionStats } from '@/types'
 
 const MIN_SECONDS = 5
+const MAX_UPLOAD_MB = 200
 const PROGRESS_STEPS = ['Transcribing', 'Measuring', 'Writing feedback']
 
 const inputClass =
@@ -43,6 +44,9 @@ const MIC_HELP: Partial<Record<RecorderState, { title: string; body: string }>> 
   },
 }
 
+const looksLikeMedia = (file: File) =>
+  file.type.startsWith('audio/') || file.type.startsWith('video/') || /\.(mp3|m4a|wav|ogg|oga|webm|mp4|mov|aac|flac)$/i.test(file.name)
+
 // Shown while calibrating, for whatever is stopping it.
 const BLOCKER_HINT: Record<CalibrationBlocker, string> = {
   torso: 'Step back until your hips are in the picture.',
@@ -65,6 +69,16 @@ function formatTime(ms: number) {
 
 type Analysis = 'idle' | 'running' | 'failed' | 'done'
 
+// What is being reviewed: a live recording or an uploaded file.
+interface Source {
+  blob: Blob
+  url: string
+  durationMs?: number
+  uploaded: boolean
+  isVideo: boolean
+  name?: string
+}
+
 export default function Session({ mode }: { mode: ModeId }) {
   const config = MODES.find((m) => m.id === mode)!
   const navigate = useNavigate()
@@ -78,6 +92,9 @@ export default function Session({ mode }: { mode: ModeId }) {
   const [analysis, setAnalysis] = useState<Analysis>('idle')
   const [progress, setProgress] = useState(0)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
+  const [upload, setUpload] = useState<{ file: File; url: string; durationMs?: number } | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
   const sessionId = useRef<string | null>(null)
   const navTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -120,6 +137,31 @@ export default function Session({ mode }: { mode: ModeId }) {
 
   useEffect(() => () => clearTimeout(navTimer.current), [])
 
+  // Release the uploaded file's preview URL when it is replaced or the screen closes.
+  const uploadUrl = upload?.url
+  useEffect(() => () => {
+    if (uploadUrl) URL.revokeObjectURL(uploadUrl)
+  }, [uploadUrl])
+
+  const chooseFile = (file: File | undefined) => {
+    if (!file) return
+    setUploadError(null)
+    if (!looksLikeMedia(file)) return setUploadError('That does not look like an audio or video file. Try an mp3, m4a, wav, webm, mp4 or mov.')
+    if (file.size > MAX_UPLOAD_MB * 1024 * 1024) return setUploadError(`That file is over ${MAX_UPLOAD_MB} MB. Try a shorter or smaller recording.`)
+    if (file.size === 0) return setUploadError('That file is empty.')
+    const url = URL.createObjectURL(file)
+    setUpload({ file, url })
+    setAnalysis('idle')
+    setAnalysisError(null)
+    // Read the length from the file so the short-recording warning and the timer work.
+    const probe = document.createElement('audio')
+    probe.preload = 'metadata'
+    probe.onloadedmetadata = () => {
+      if (Number.isFinite(probe.duration)) setUpload((u) => (u && u.url === url ? { ...u, durationMs: probe.duration * 1000 } : u))
+    }
+    probe.src = url
+  }
+
   const mood: Mood =
     analysis === 'done'
       ? 'happy'
@@ -140,9 +182,15 @@ export default function Session({ mode }: { mode: ModeId }) {
     setStep('session')
   }
 
+  const { state } = recorder
+  const source: Source | null = upload
+    ? { blob: upload.file, url: upload.url, durationMs: upload.durationMs, uploaded: true, isVideo: upload.file.type.startsWith('video/'), name: upload.file.name }
+    : state === 'review' && recorder.recording
+      ? { ...recorder.recording, uploaded: false, isVideo: false }
+      : null
+
   const analyze = async () => {
-    const recording = recorder.recording
-    if (!recording) return
+    if (!source) return
     setAnalysis('running')
     setProgress(0)
     setAnalysisError(null)
@@ -151,10 +199,10 @@ export default function Session({ mode }: { mode: ModeId }) {
         const session = await createSession({ speaker: speaker.trim(), mode, topic: topic.trim() })
         sessionId.current = session.session_id
       }
-      const result = await postSpeech(recording.blob, {
+      const result = await postSpeech(source.blob, {
         session_id: sessionId.current,
         target_length_sec: targetSeconds,
-        vision: visionStats.current,
+        vision: source.uploaded ? undefined : visionStats.current, // an uploaded file has no camera stats
       })
       setAnalysis('done')
       const id = sessionId.current
@@ -170,8 +218,14 @@ export default function Session({ mode }: { mode: ModeId }) {
   const reRecord = () => {
     setAnalysis('idle')
     setAnalysisError(null)
+    setUploadError(null)
     visionStats.current = undefined
-    recorder.reset()
+    if (upload) {
+      setUpload(null)
+      fileInput.current?.click()
+    } else {
+      recorder.reset()
+    }
   }
 
   const editDetails = () => {
@@ -179,9 +233,8 @@ export default function Session({ mode }: { mode: ModeId }) {
     setStep('setup')
   }
 
-  const { state } = recorder
   const recordingActive = state === 'recording' || state === 'paused'
-  const shortRecording = recorder.recording ? recorder.recording.durationMs < MIN_SECONDS * 1000 : false
+  const shortRecording = source?.durationMs !== undefined && source.durationMs < MIN_SECONDS * 1000
 
   return (
     <div data-mode={mode} className="page-mode min-h-dvh pb-10 text-foreground">
@@ -199,7 +252,7 @@ export default function Session({ mode }: { mode: ModeId }) {
 
         <div className="relative">
           <div aria-hidden className="absolute inset-x-4 top-12 bottom-0 rounded-full bg-mode-soft ring-4 ring-mode/60" />
-          <Mascot mood={mood} className={`relative ${step === 'setup' ? 'w-40 sm:w-48' : 'w-56 sm:w-72'}`} />
+          <Mascot mood={mood} playful={!recordingActive && analysis === 'idle'} className={`relative ${step === 'setup' ? 'w-40 sm:w-48' : 'w-56 sm:w-72'}`} />
         </div>
 
         {step === 'setup' ? (
@@ -235,8 +288,8 @@ export default function Session({ mode }: { mode: ModeId }) {
         ) : (
           <>
             <div className="flex flex-col items-center gap-1">
-              <p role="timer" aria-label="Recorded time" className="font-heading text-6xl font-semibold tabular-nums sm:text-7xl">
-                {formatTime(recorder.elapsedMs)}
+              <p role="timer" aria-label={upload ? 'Length of the uploaded recording' : 'Recorded time'} className="font-heading text-6xl font-semibold tabular-nums sm:text-7xl">
+                {upload ? (upload.durationMs !== undefined ? formatTime(upload.durationMs) : '--:--') : formatTime(recorder.elapsedMs)}
               </p>
               {targetSeconds && <p className="text-muted-foreground">of {formatTime(targetSeconds * 1000)} target</p>}
               <p className="font-semibold text-mode-strong">{topic.trim()}</p>
@@ -272,17 +325,26 @@ export default function Session({ mode }: { mode: ModeId }) {
               )}
             </div>
 
-            {analysis === 'idle' && state === 'idle' && (
+            {analysis === 'idle' && state === 'idle' && !upload && (
               <>
                 <p role="status">Press Start when you are ready. I will wait.</p>
                 <div className="flex flex-wrap justify-center gap-3">
                   <Button onClick={recorder.start} className={`${bigButton} bg-mode-strong text-on-mode-strong hover:bg-mode-strong/90`}>
                     <Mic className="size-5" aria-hidden /> Start
                   </Button>
+                  <Button variant="outline" onClick={() => fileInput.current?.click()} className="h-14 gap-2 rounded-full border-2 border-foreground/20 bg-card px-6 text-base font-semibold">
+                    <Upload className="size-5" aria-hidden /> Upload a recording
+                  </Button>
                   <Button variant="outline" onClick={editDetails} className="h-14 rounded-full border-2 border-foreground/20 bg-card px-6 text-base font-semibold">
                     Edit details
                   </Button>
                 </div>
+                <p className="text-sm text-muted-foreground">Already recorded yourself presenting? Upload an audio or video file instead.</p>
+                {uploadError && (
+                  <p role="alert" className="rounded-2xl bg-coral/20 px-4 py-2 font-semibold">
+                    {uploadError}
+                  </p>
+                )}
               </>
             )}
 
@@ -325,10 +387,15 @@ export default function Session({ mode }: { mode: ModeId }) {
               </div>
             )}
 
-            {state === 'review' && recorder.recording && analysis !== 'running' && analysis !== 'done' && (
+            {source && analysis !== 'running' && analysis !== 'done' && (
               <div className="flex w-full flex-col items-center gap-4">
-                <h2 className="text-xl font-semibold">Listen back</h2>
-                <audio controls src={recorder.recording.url} className="w-full" />
+                <h2 className="text-xl font-semibold">{source.uploaded ? 'Check your file' : 'Listen back'}</h2>
+                {source.name && <p className="max-w-full truncate text-sm text-muted-foreground">{source.name}</p>}
+                {source.isVideo ? (
+                  <video controls playsInline src={source.url} className="max-h-64 w-full rounded-2xl bg-black" />
+                ) : (
+                  <audio controls src={source.url} className="w-full" />
+                )}
                 {shortRecording && (
                   <p role="status" className="flex items-start gap-2 rounded-2xl bg-butter/50 px-4 py-3 text-left">
                     <TriangleAlert className="mt-0.5 size-5 shrink-0" aria-hidden />
@@ -343,8 +410,13 @@ export default function Session({ mode }: { mode: ModeId }) {
                 )}
                 <div className="flex flex-wrap justify-center gap-3">
                   <Button variant="outline" onClick={reRecord} className="h-14 gap-2 rounded-full border-2 border-foreground/20 bg-card px-6 text-base font-semibold">
-                    <RotateCcw className="size-5" aria-hidden /> Re-record
+                    <RotateCcw className="size-5" aria-hidden /> {source.uploaded ? 'Choose a different file' : 'Re-record'}
                   </Button>
+                  {source.uploaded && (
+                    <Button variant="outline" onClick={() => setUpload(null)} className="h-14 gap-2 rounded-full border-2 border-foreground/20 bg-card px-6 text-base font-semibold">
+                      <Mic className="size-5" aria-hidden /> Record instead
+                    </Button>
+                  )}
                   <Button onClick={analyze} className={`${bigButton} bg-mode text-plum hover:bg-mode/85`}>
                     {analysis === 'failed' ? 'Try again' : 'Analyze'}
                   </Button>
@@ -370,6 +442,16 @@ export default function Session({ mode }: { mode: ModeId }) {
             )}
           </>
         )}
+        <input
+          ref={fileInput}
+          type="file"
+          accept="audio/*,video/*"
+          hidden
+          onChange={(event) => {
+            chooseFile(event.target.files?.[0])
+            event.target.value = '' // lets the same file be chosen again
+          }}
+        />
       </main>
     </div>
   )

@@ -72,9 +72,12 @@ export interface PostSpeechOptions {
 // File extension that matches a recording's real MIME type (Safari records mp4, others webm or ogg).
 function extensionFor(mime: string): string {
   const type = mime.split(';')[0].trim().toLowerCase()
+  if (type.includes('quicktime')) return 'mov'
+  if (type.includes('m4a')) return 'm4a'
   if (type.includes('mp4')) return 'mp4'
   if (type.includes('ogg')) return 'ogg'
   if (type.includes('wav')) return 'wav'
+  if (type.includes('flac')) return 'flac'
   if (type.includes('mpeg')) return 'mp3'
   return 'webm'
 }
@@ -85,7 +88,9 @@ function extensionFor(mime: string): string {
 export function postSpeech(audio: Blob, options: PostSpeechOptions = {}): Promise<SpeechResponse> {
   if (!features.useMocks) {
     const form = new FormData()
-    form.append('audio', audio, `speech.${extensionFor(audio.type)}`)
+    // An uploaded file keeps its own name; a recording gets one that matches its MIME type.
+    const filename = audio instanceof File && audio.name ? audio.name : `speech.${extensionFor(audio.type)}`
+    form.append('audio', audio, filename)
     if (options.session_id) form.append('session_id', options.session_id)
     if (options.vision) form.append('vision', JSON.stringify(options.vision))
     if (options.target_length_sec) form.append('target_length_sec', String(options.target_length_sec))
