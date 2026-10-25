@@ -49,7 +49,13 @@ Run (from the repo root, with the server already running):
     python bridge/bridge.py --dry-run    # no Arduino: prints the serial lines,
                                          # and typing P:1 + Enter fakes the sensor
 
-Find the port: Arduino IDE > Tools > Port, or Device Manager > Ports (COM & LPT).
+Find the port: Arduino IDE > Tools > Port, Device Manager > Ports (COM & LPT),
+or on a Mac `ls /dev/cu.usb*`. If SERIAL_PORT is missing or not plugged in, the
+bridge uses the one Arduino it can find, so a new USB port or hub is fine.
+
+If the cable is pulled (or a USB-C dongle drops its devices for a moment), the
+bridge keeps retrying and reconnects by itself, then resends the robot's last
+state and LCD text. No restart needed.
 """
 
 import argparse
@@ -78,6 +84,13 @@ PREFIXES = {"state": "S", "alert": "A", "lcd": "L"}
 
 # The arm is the one exception: "raise"/"lower" become 1/0, so H:1 or H:0.
 HAND = {"raise": "1", "lower": "0"}
+
+# How often to try again when the Arduino isn't connected.
+RETRY_SECONDS = 2
+
+# USB vendor IDs of Arduino boards and the usual clone USB chips (CH340, FTDI).
+# Used to find the board when SERIAL_PORT isn't plugged in.
+ARDUINO_VENDOR_IDS = {0x2341, 0x2A03, 0x1A86, 0x0403}
 
 
 # =============================================================================
@@ -119,37 +132,122 @@ def to_serial_line(event: dict) -> str | None:
 class DryRunPort:
     """A pretend Arduino, used with --dry-run when no board is plugged in.
 
-    It has the same two methods the real serial port has (write and readline),
-    so the rest of the code can't tell the difference:
-      - write():    prints the line instead of sending it over USB
+    It has the same methods as SerialLink (send and readline), so the rest of
+    the code can't tell the difference:
+      - send():     prints the line instead of sending it over USB
       - readline(): reads what you type in the terminal, so typing P:1 + Enter
                     acts like the presence sensor firing
     """
 
-    def write(self, data: bytes) -> None:
-        print(f"  -> arduino  {data.decode().strip()}")
+    def send(self, line: str) -> None:
+        print(f"  -> arduino  {line}")
 
     def readline(self) -> bytes:
         return sys.stdin.readline().encode()
 
+    async def keep_open(self) -> None:
+        pass  # nothing to reconnect
 
-def open_port(dry_run: bool):
-    """Open the USB serial connection to the Mega (or the fake one)."""
-    if dry_run:
-        return DryRunPort()
 
-    import serial  # pyserial; only needed when a real board is connected
+def find_port(configured: str) -> str:
+    """Pick the serial port: SERIAL_PORT if it's plugged in, else the one Arduino found."""
+    from serial.tools import list_ports  # pyserial; only needed for a real board
 
-    port = os.getenv("SERIAL_PORT", "COM3")
-    # timeout=0.1 means readline() gives up after 0.1 s if the Mega hasn't
-    # sent anything, instead of waiting forever. That keeps the bridge responsive.
-    conn = serial.Serial(port, BAUD, timeout=0.1)
+    ports = list_ports.comports()
+    if configured and any(p.device == configured for p in ports):
+        return configured
+    boards = [p.device for p in ports if p.vid in ARDUINO_VENDOR_IDS]
+    if len(boards) == 1:
+        if configured:
+            print(f"serial: {configured} not found, using {boards[0]} instead")
+        return boards[0]
+    if boards:
+        raise RuntimeError(f"{configured or 'SERIAL_PORT'} not found and several boards "
+                           f"are plugged in ({', '.join(boards)}); set SERIAL_PORT in .env")
+    raise RuntimeError("no Arduino found. Is it plugged in? (On a Mac, also allow "
+                       "the accessory when macOS asks.)")
 
-    # Opening the port resets the Mega (same as pressing its reset button),
-    # so wait for it to boot and reach setup() before sending anything.
-    time.sleep(2)
-    print(f"serial: connected to {port} at {BAUD} baud")
-    return conn
+
+class SerialLink:
+    """The real USB connection to the Mega, reopened whenever it drops.
+
+    Same send/readline as DryRunPort. If a read or write fails (cable pulled,
+    dongle reset), the port is closed and keep_open() reopens it, then resends
+    the last state, LCD text and arm position so the robot catches up. Alerts
+    aren't resent: they're only meaningful in the moment.
+    """
+
+    def __init__(self, configured: str) -> None:
+        self.configured = configured
+        self.conn = None             # the open serial port, or None while disconnected
+        self.last: dict[str, str] = {}  # "S"/"L"/"H" -> last line sent, for the catch-up
+        self.last_error = ""
+
+    def _open(self):
+        """Blocking open, run in a background thread so the bridge keeps working."""
+        import serial
+
+        name = find_port(self.configured)
+        # timeout=0.1 means readline() gives up after 0.1 s if the Mega hasn't
+        # sent anything, instead of waiting forever. That keeps the bridge responsive.
+        conn = serial.Serial(name, BAUD, timeout=0.1)
+        # Opening the port resets the Mega (same as pressing its reset button),
+        # so wait for it to boot and reach setup() before sending anything.
+        time.sleep(2)
+        return name, conn
+
+    async def keep_open(self) -> None:
+        """Background job: whenever the port is closed, try to open it again."""
+        while True:
+            if self.conn is None:
+                try:
+                    name, conn = await asyncio.to_thread(self._open)
+                except Exception as error:
+                    if str(error) != self.last_error:  # say it once, not every 2 s
+                        print(f"serial: {error}; retrying every {RETRY_SECONDS} s")
+                        self.last_error = str(error)
+                    await asyncio.sleep(RETRY_SECONDS)
+                    continue
+                self.conn, self.last_error = conn, ""
+                print(f"serial: connected to {name} at {BAUD} baud")
+                for line in self.last.values():  # catch the rebooted robot up
+                    self._write(line)
+            await asyncio.sleep(0.5)
+
+    def send(self, line: str) -> None:
+        if line[0] in "SLH":
+            self.last[line[0]] = line
+        if self.conn is None:
+            print(f"serial: not connected, skipped {line}")
+            return
+        self._write(line)
+
+    def _write(self, line: str) -> None:
+        try:
+            self.conn.write((line + "\n").encode())  # "\n" ends the line for readStringUntil
+        except Exception as error:
+            self._lost(error)
+
+    def readline(self) -> bytes:
+        conn = self.conn
+        if conn is None:
+            time.sleep(0.1)  # nothing to read while disconnected
+            return b""
+        try:
+            return conn.readline()
+        except Exception as error:
+            self._lost(error)
+            return b""
+
+    def _lost(self, error: Exception) -> None:
+        if self.conn is None:
+            return  # the reader and writer can both notice the same drop
+        print(f"serial: connection lost ({error}); reconnecting...")
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+        self.conn = None
 
 
 # =============================================================================
@@ -165,7 +263,7 @@ async def server_to_robot(ws, port) -> None:
     async for message in ws:
         line = to_serial_line(json.loads(message))
         if line:
-            port.write((line + "\n").encode())  # "\n" ends the line for readStringUntil
+            port.send(line)
 
 
 async def robot_to_server(ws, port) -> None:
@@ -193,7 +291,10 @@ async def robot_to_server(ws, port) -> None:
 # =============================================================================
 
 async def main(dry_run: bool) -> None:
-    port = open_port(dry_run)
+    port = DryRunPort() if dry_run else SerialLink(os.getenv("SERIAL_PORT", ""))
+    # Runs for as long as the bridge does, reopening the serial port when it drops.
+    # Keep a reference to the task, or Python may garbage-collect it.
+    keeper = asyncio.create_task(port.keep_open())
     url = os.getenv("EVENTS_URL", "ws://localhost:8000/events")
 
     # "async for ws in connect(url)" connects to the server, and if the
