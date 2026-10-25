@@ -122,8 +122,11 @@ made by this module.
   Callback errors follow the same path. Initialization failures reject the promise.
 
 Alert conditions must persist for roughly **2 seconds**, after smoothing, and each
-alert value has its own **12 second** cooldown. Slouch and sway share the `posture`
-cooldown. A continuously bad condition repeats at most once per cooldown.
+behaviour (slouch, sway, pockets, fidget, eye contact) has its own sustained timer and
+**12 second** cooldown, so swaying can alert right after a slouch alert. Events still
+name the category (`posture`, `hands`, `eye_contact`), at most one per category per
+frame; `status.alertBehaviors` says which behaviour each came from. A continuously bad
+behaviour repeats at most once per cooldown.
 Calibration and timing use presented **video time**: a replay at 2x reaches two
 seconds of behavior in one wall-clock second; pausing does not advance timers.
 Seeks/start/recalibration begin a new analysis timeline and clear cooldowns.

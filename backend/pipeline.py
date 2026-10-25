@@ -12,7 +12,7 @@ from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.events import broadcast
+from backend.events import broadcast, idle_after
 from backend.routes.sessions import get_session_store
 
 logger = logging.getLogger(__name__)
@@ -262,8 +262,92 @@ async def web_search(query: str) -> list[dict]:
             and not SKIP_SOURCES.search(urlsplit(h["link"]).hostname or "")][:3]
 
 
+def _listed(sources: list[dict]) -> str:
+    return "\n".join(f"{i}. {s['title']}: {s['snippet']} ({s['url']})"
+                     for i, s in enumerate(sources, 1)) or "No search results."
+
+
+def _source(sources: list[dict], n: int | None) -> dict | None:
+    return sources[n - 1] if n and 1 <= n <= len(sources) else None
+
+
 async def ask_question(session: dict, results: dict) -> dict:
-    """The robot's one audience question: pick a claim, search it once, ask about it."""
+    """What the robot says when called on, by mode: a question (presentation), a
+    counter-argument (debate) or an interview question about the speaker (interview)."""
+    if session.get("mode") == "debate":
+        return await _debate_counter(session, results)
+    if session.get("mode") == "interview":
+        return await _interview_question(session, results)
+    return await _audience_question(session, results)
+
+
+class DebatePlan(BaseModel):
+    position: str
+    search_queries: list[str]
+
+
+class Counter(BaseModel):
+    counter: str
+    source_index: int | None
+
+
+async def _debate_counter(session: dict, results: dict) -> dict:
+    """The opponent's counter-argument: two searches for evidence against the speaker."""
+    plan = DebatePlan.model_validate_json(await call_gemini(f"""You are a sharp, fair debate opponent.
+Motion: {session['topic']}
+
+The speaker's argument:
+\"\"\"{results['transcript']}\"\"\"
+
+State the speaker's main position in one sentence. Then write TWO different short Google
+search queries that would find the strongest evidence AGAINST that position (research,
+data, reputable reporting; words like "study" or "evidence" help). Return JSON only.""",
+        DebatePlan))
+
+    queries = [q for q in plan.search_queries if q.strip()][:2]
+    found = await asyncio.gather(*(web_search(q) for q in queries))
+    sources = list({s["url"]: s for hits in found for s in hits}.values())[:4]  # dedupe
+    countered = Counter.model_validate_json(await call_gemini(f"""You are the opposing debater replying to this speech.
+Their position: "{plan.position}"
+
+Search results:
+{_listed(sources)}
+
+Give ONE counter-argument, under 45 words; it is spoken aloud.
+- Attack the strongest point of their position, not a side detail.
+- Build it on a trustworthy result if one helps, and set source_index to its number;
+  otherwise set source_index to null and argue from reasoning alone.
+- End by challenging them to respond. Firm but friendly.
+- Never state facts that are not in the results. Return JSON only.""", Counter))
+
+    return {"question": countered.counter, "claim": plan.position,
+            "search_query": " | ".join(queries), "source": _source(sources, countered.source_index),
+            "kind": "counter"}
+
+
+class InterviewQuestion(BaseModel):
+    question: str
+    focus: str  # what the question probes, e.g. "handling a failed project"
+
+
+async def _interview_question(session: dict, results: dict) -> dict:
+    """An interviewer's follow-up about the speaker themselves; nothing to search."""
+    asked = InterviewQuestion.model_validate_json(await call_gemini(f"""You are interviewing the speaker for: {session['topic']}
+
+What they just said:
+\"\"\"{results['transcript']}\"\"\"
+
+Ask ONE follow-up interview question about THEM: their own experience, decisions, skills
+or motivation, the way a good hiring manager would. A behavioural question ("Tell me
+about a time...") that digs into something they mentioned is ideal. Under 30 words; it is
+spoken aloud. focus names what the question probes, in a few words. Return JSON only.""",
+        InterviewQuestion))
+    return {"question": asked.question, "claim": asked.focus, "search_query": "",
+            "source": None, "kind": "interview"}
+
+
+async def _audience_question(session: dict, results: dict) -> dict:
+    """Presentation: pick a claim, search it once, ask about it."""
     transcript = results["transcript"]
     plan = SearchPlan.model_validate_json(await call_gemini(f"""You are an engaged audience member at a practice speech.
 Topic: {session['topic']}
@@ -277,13 +361,11 @@ research, survey data or reputable reporting on it (words like "study" or "surve
 Return JSON only.""", SearchPlan))
 
     sources = await web_search(plan.search_query)
-    listed = "\n".join(f"{i}. {s['title']}: {s['snippet']} ({s['url']})"
-                       for i, s in enumerate(sources, 1)) or "No search results."
     asked = Question.model_validate_json(await call_gemini(f"""You raised your hand after this practice speech and were called on.
 The claim you are asking about: "{plan.claim}"
 
 Search results:
-{listed}
+{_listed(sources)}
 
 Ask ONE short, friendly but sharp question, under 30 words; it is spoken aloud.
 - It must make the speaker defend or deepen the claim: ask for their evidence, raise a
@@ -298,13 +380,77 @@ Ask ONE short, friendly but sharp question, under 30 words; it is spoken aloud.
 - Never state facts that are not in the results. Return JSON only.""",
         Question))
 
-    n = asked.source_index
     return {"question": asked.question, "claim": plan.claim, "search_query": plan.search_query,
-            "source": sources[n - 1] if n and 1 <= n <= len(sources) else None}
+            "source": _source(sources, asked.source_index), "kind": "question"}
 
 
 class NoSpeechError(ValueError):
     pass
+
+
+# ---- the speaker's answer to that question: recorded once, rated once ----
+
+class AnswerRating(BaseModel):
+    score: int        # 0-10
+    answered: bool    # False if the answer dodged the question
+    did_well: str
+    improve: str
+    robot_line: str
+
+
+async def rate_answer(audio: bytes, question: str, claim: str, session: dict | None = None) -> dict:
+    await broadcast({"type": "state", "value": "thinking"})
+    handed_off = False
+    try:
+        transcription = await transcribe(audio, vocabulary(session))
+        if not transcription["words"]:
+            raise NoSpeechError("No speech detected in the answer")
+        m = compute_metrics(transcription)
+        metrics = {k: m[k] for k in ("wpm", "fillers", "filler_list", "speaking_time")}
+
+        mode = (session or {}).get("mode")
+        asked, criteria = {
+            "debate": (f'As their debate opponent you countered:\n"{question}"\n(against their position: "{claim}")',
+                       "did the rebuttal take on the counter-argument directly; did it give evidence or a "
+                       "concrete reason; was the logic sound; was it clear and composed (few fillers)"),
+            "interview": (f'As their interviewer you asked:\n"{question}"\n(probing: "{claim}")',
+                          "did it answer the question; did it give a specific example with situation, task, "
+                          "action and result (STAR); was it relevant to the role; was it concise and composed "
+                          "(few fillers)"),
+        }.get(mode, (f'After a practice speech you asked the speaker:\n"{question}"\n(about their claim: "{claim}")',
+                     "did it directly answer the question; did it give evidence or a concrete reason; was it "
+                     "clear and concise; was it composed (few fillers)"))
+
+        rating = AnswerRating.model_validate_json(await call_gemini(f"""You are a friendly, honest speech coach. {asked}
+
+Their spoken answer:
+\"\"\"{transcription['transcript']}\"\"\"
+
+Measured (facts; explain them, never contradict them):
+{json.dumps(metrics)}
+
+Rate the answer 0-10 on: {criteria}.
+- answered is false if they dodged the question or talked about something else.
+- did_well and improve: one specific sentence each, quoting or pointing to the answer.
+- robot_line is spoken aloud by a robot: one short, friendly sentence, under 15 words.
+Return JSON only.""", AnswerRating)).model_dump()
+
+        await broadcast({"type": "lcd", "value": f"Answer: {rating['score']}/10"})
+        await broadcast({"type": "state", "value": "speaking"})
+        idle_after(speaking_seconds(rating["robot_line"]))  # green while the browser says it
+        handed_off = True
+        return {"transcript": transcription["transcript"], "metrics": metrics, "rating": rating}
+    except Exception:
+        await broadcast({"type": "lcd", "value": "Try again"})
+        raise
+    finally:
+        if not handed_off:  # errors or a cancelled request: never leave the robot thinking
+            await broadcast({"type": "state", "value": "idle"})
+
+
+def speaking_seconds(line: str) -> float:
+    """Roughly how long the browser's voice takes to say `line` (~2.5 words/s)."""
+    return min(8.0, 1.5 + 0.4 * len(line.split()))
 
 
 async def save_session(result: dict) -> bool:
@@ -323,6 +469,7 @@ async def save_session(result: dict) -> bool:
 async def run_session(audio: bytes, vision: VisionStats | None = None,
                       session: dict | None = None) -> dict:
     await broadcast({"type": "state", "value": "thinking"})
+    handed_off = False  # True once idle_after() owns going back to idle
     try:
         transcription = await transcribe(audio, vocabulary(session))
         if not transcription["words"]:
@@ -338,18 +485,20 @@ async def run_session(audio: bytes, vision: VisionStats | None = None,
         await broadcast({"type": "lcd", "value": f"Score: {feedback['overall']}/100"})
         await broadcast({"type": "state", "value": "speaking"})
 
-        # TTS of robot_line goes here; until then the browser speaks it.
-
         result = {"session_id": session["session_id"] if session else None,
                   "transcript": transcription["transcript"],
                   "metrics": metrics, "feedback": feedback}
         result["saved"] = await save_session(result)
         if session:  # it has a question; POST /sessions/{id}/question lowers the hand
             await broadcast({"type": "hand", "value": "raise"})
+        # Green while the Results screen reads robot_line aloud, then idle.
+        idle_after(speaking_seconds(feedback["robot_line"]))
+        handed_off = True
         return result
     except Exception:
         await broadcast({"type": "lcd", "value": "Try again"})
         raise
     finally:
-        # Whatever happens, never leave the robot stuck on "thinking".
-        await broadcast({"type": "state", "value": "idle"})
+        # Whatever happens (errors, a cancelled request), never leave the robot thinking.
+        if not handed_off:
+            await broadcast({"type": "state", "value": "idle"})

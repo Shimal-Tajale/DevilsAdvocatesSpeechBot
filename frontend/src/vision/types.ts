@@ -1,5 +1,8 @@
 export type AlertValue = 'posture' | 'hands' | 'eye_contact';
 
+/** The behaviour behind an alert; each has its own sustained timer and cooldown. */
+export type AlertBehavior = 'slouch' | 'sway' | 'pockets' | 'fidget' | 'eye_contact';
+
 export interface VisionAlert {
   type: 'alert';
   value: AlertValue;
@@ -87,6 +90,8 @@ export interface AnalysisStatus {
   conditions: Record<AlertValue, boolean>;
   calibrationBlockers: CalibrationBlocker[];
   behaviors?: { slouching: boolean; possiblePockets: boolean; fidgeting: boolean; swaying: boolean };
+  /** Which behaviour each alert emitted with this frame came from (alerts only name the category). */
+  alertBehaviors?: Partial<Record<AlertValue, AlertBehavior>>;
   diagnostics?: { neckDrop: number | null; torsoDrop: number | null; pocketStillMs: number;
     wristReversals: number; torsoReversals: number; motionConfidence: number };
   debug?: {

@@ -132,10 +132,19 @@ export interface SessionResults {
 // POST /sessions/{session_id}/question: the mascot's audience question after a speech,
 // from one web search. source is null when nothing useful was found (or no search key).
 export interface AudienceQuestion {
-  question: string
-  claim: string
-  search_query: string
+  question: string // a counter-argument in debate mode
+  claim: string // presentation: the claim asked about; debate: the speaker's position; interview: what it probes
+  search_query: string // debate joins its two queries with " | "; interview searches nothing
   source: { title: string; url: string; snippet: string } | null
+  kind?: 'question' | 'counter' | 'interview'
+}
+
+// POST /sessions/{session_id}/answer: the speaker's recorded answer to that question,
+// rated once. score is 0-10; answered is false when the answer dodged the question.
+export interface AnswerResult {
+  transcript: string
+  metrics: { wpm: number; fillers: number; filler_list: string[]; speaking_time: number }
+  rating: { score: number; answered: boolean; did_well: string; improve: string; robot_line: string }
 }
 
 // POST /speech response.

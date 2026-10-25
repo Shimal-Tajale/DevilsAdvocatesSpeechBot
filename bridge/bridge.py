@@ -20,12 +20,12 @@ Read with Serial.readStringUntil('\n'), then check the first two characters.
     S:listening    state: LED blue, head faces the speaker
     S:thinking     state: LED yellow, head tilts
     S:speaking     state: LED green
-    A:posture      alert: red LED + head shake + short beep
-    A:hands        (same reaction for every alert; the word after A: says why,
-    A:eye_contact   so you can vary it if there's time)
-    A:too_fast
-    A:too_quiet
-    A:filler       (tier 1 add-on: also bump a filler counter on the LCD)
+    A:<word>       alert: red LED + head shake + short beep; show "! <word>".
+                   The word says what happened, ready to display (14 chars max):
+                   Slouching, Swaying, Hands pocketed, Fidgeting, Looking away,
+                   Posture, Hands, Too fast, Too quiet
+    A:filler       (tier 1 add-on: also bump a filler counter on the LCD;
+                   always exactly "filler")
     L:<text>       show <text> on the LCD. Already cut to 16 chars max.
                    e.g. "L:Score: 68/100" or "L:Stand tall!"
     H:1 / H:0      raise / lower the arm servo (if you have a second servo)
@@ -85,6 +85,16 @@ PREFIXES = {"state": "S", "alert": "A", "lcd": "L"}
 # The arm is the one exception: "raise"/"lower" become 1/0, so H:1 or H:0.
 HAND = {"raise": "1", "lower": "0"}
 
+# robot.ino shows an alert as "! <word>" on the LCD. The browser says which
+# behaviour it was ("detail"), so the robot shows "! Slouching", not "! posture".
+# 14 characters at most, so "! " + word fits the 16-character row.
+# "filler" is left alone: robot.ino counts fillers by that exact word.
+ALERT_WORDS = {
+    "slouch": "Slouching", "sway": "Swaying", "pockets": "Hands pocketed",
+    "fidget": "Fidgeting", "eye_contact": "Looking away",
+    "posture": "Posture", "hands": "Hands", "too_fast": "Too fast", "too_quiet": "Too quiet",
+}
+
 # How often to try again when the Arduino isn't connected.
 RETRY_SECONDS = 2
 
@@ -103,7 +113,8 @@ def to_serial_line(event: dict) -> str | None:
     Returns None for events the robot doesn't care about; those are skipped.
     Examples:
         {"type": "state", "value": "thinking"}  ->  "S:thinking"
-        {"type": "alert", "value": "posture"}   ->  "A:posture"
+        {"type": "alert", "value": "posture", "detail": "slouch"}  ->  "A:Slouching"
+        {"type": "alert", "value": "eye_contact"}                  ->  "A:Looking away"
         {"type": "lcd",   "value": "Score: 68"} ->  "L:Score: 68"
         {"type": "hand",  "value": "raise"}     ->  "H:1"
         {"type": "feedback", ...}               ->  None (website only)
@@ -113,6 +124,11 @@ def to_serial_line(event: dict) -> str | None:
     # Arm servo: special case, because the value becomes a number.
     if kind == "hand" and value in HAND:
         return f"H:{HAND[value]}"
+
+    # Alerts: the specific behaviour if the browser sent one, else the alert kind.
+    if kind == "alert" and value is not None:
+        word = ALERT_WORDS.get(event.get("detail")) or ALERT_WORDS.get(value) or str(value)
+        return f"A:{word}"
 
     # Not something the robot reacts to: skip it.
     if kind not in PREFIXES or value is None:
@@ -211,6 +227,7 @@ class SerialLink:
                 self.conn, self.last_error = conn, ""
                 print(f"serial: connected to {name} at {BAUD} baud")
                 for line in self.last.values():  # catch the rebooted robot up
+                    print(f"  -> arduino  {line}  (catch-up)")
                     self._write(line)
             await asyncio.sleep(0.5)
 
@@ -220,6 +237,7 @@ class SerialLink:
         if self.conn is None:
             print(f"serial: not connected, skipped {line}")
             return
+        print(f"  -> arduino  {line}")  # same as --dry-run, so you can see events arriving
         self._write(line)
 
     def _write(self, line: str) -> None:

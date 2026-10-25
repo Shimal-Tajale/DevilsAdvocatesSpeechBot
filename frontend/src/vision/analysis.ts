@@ -1,7 +1,7 @@
 import { wristMotionEvidence, FIDGET_WRIST_VISIBILITY } from './wrist-motion.js';
 import { FrontPocketEntry } from './front-pockets.js';
 import type {
-  AlertValue, AnalysisOptions, AnalysisStatus, CalibrationBlocker, Measurements, VisionAlert,
+  AlertBehavior, AlertValue, AnalysisOptions, AnalysisStatus, CalibrationBlocker, Measurements, VisionAlert,
 } from './types.js';
 
 export const DEFAULT_ANALYSIS: Readonly<Required<AnalysisOptions>> = {
@@ -14,6 +14,11 @@ export const DEFAULT_ANALYSIS: Readonly<Required<AnalysisOptions>> = {
 };
 
 const alertTypes: AlertValue[] = ['posture', 'hands', 'eye_contact'];
+// Ordered so a frame's alerts still come out posture, hands, eye_contact.
+const alertBehaviors: AlertBehavior[] = ['slouch', 'sway', 'pockets', 'fidget', 'eye_contact'];
+const BEHAVIOR_CATEGORY: Record<AlertBehavior, AlertValue> = {
+  slouch: 'posture', sway: 'posture', pockets: 'hands', fidget: 'hands', eye_contact: 'eye_contact',
+};
 const baselineKeys = ['neckHeight', 'torsoHeight', 'headYaw', 'headPitch'] as const;
 type Baseline = Record<typeof baselineKeys[number], number>;
 
@@ -34,9 +39,9 @@ export class VisionAnalysis {
   private pockets: FrontPocketEntry;
   private motionActive = { sway: false, fidget: false };
   private behaviorSince: Record<string, number> = {};
-  private handCondition: 'pockets' | 'fidget' | null = null;
-  private since: Partial<Record<AlertValue, number>> = {};
-  private emitted: Partial<Record<AlertValue, number>> = {};
+  // Per behaviour, not per category: swaying can alert right after a slouch alert.
+  private since: Partial<Record<AlertBehavior, number>> = {};
+  private emitted: Partial<Record<AlertBehavior, number>> = {};
   // A plain field, not a constructor parameter property, so the app's
   // erasableSyntaxOnly setting accepts this file.
   private readonly onAlert: (event: VisionAlert) => void;
@@ -71,7 +76,6 @@ export class VisionAnalysis {
     this.motionActive = { sway: false, fidget: false };
     this.pockets.reset();
     this.since = {};
-    this.handCondition = null;
     this.behaviorSince = {};
     this.emitted = {};
   }
@@ -91,7 +95,6 @@ export class VisionAnalysis {
     this.motionActive = { sway: false, fidget: false };
     this.pockets.interrupt();
     this.since = {};
-    this.handCondition = null;
     this.behaviorSince = {};
   }
 
@@ -136,6 +139,7 @@ export class VisionAnalysis {
     if (dt > this.options.maxFrameGapMs) calibrationBlockers.push('frame_gap');
 
     const pending: VisionAlert[] = [];
+    const emittedBehaviors: Partial<Record<AlertValue, AlertBehavior>> = {};
     if (!this.baseline) {
       if (this.calibrationAnchor && baselineKeys.some(key => raw[key] != null &&
           Math.abs(raw[key]! - this.calibrationAnchor![key]) > (key === 'torsoHeight' ? 0.08 : 0.12))) {
@@ -258,23 +262,31 @@ export class VisionAnalysis {
       }
       conditions.posture = behaviors.slouching || behaviors.swaying;
       conditions.hands = behaviors.possiblePockets || behaviors.fidgeting;
-      const handCondition = behaviors.possiblePockets ? 'pockets' : behaviors.fidgeting ? 'fidget' : null;
-      if (handCondition !== this.handCondition) delete this.since.hands;
-      this.handCondition = handCondition;
       conditions.eye_contact = measurements.headYaw !== null && measurements.headPitch !== null &&
         (Math.abs(measurements.headYaw - b.headYaw) > this.options.yawThreshold ||
          Math.abs(measurements.headPitch - b.headPitch) > this.options.pitchThreshold);
 
-      for (const value of alertTypes) {
-        if (!conditions[value]) {
-          delete this.since[value];
+      // Each behaviour has its own sustained timer and cooldown. Events still name the
+      // category (one per category per frame); status.alertBehaviors says which behaviour.
+      const active: Record<AlertBehavior, boolean> = {
+        slouch: behaviors.slouching, sway: behaviors.swaying,
+        pockets: behaviors.possiblePockets, fidget: behaviors.fidgeting,
+        eye_contact: conditions.eye_contact,
+      };
+      for (const behavior of alertBehaviors) {
+        if (!active[behavior]) {
+          delete this.since[behavior];
           continue;
         }
-        this.since[value] ??= time;
-        if (time - this.since[value]! >= this.options.sustainedMs &&
-            time - (this.emitted[value] ?? -Infinity) >= this.options.cooldownMs) {
-          this.emitted[value] = time;
-          pending.push({ type: 'alert', value });
+        this.since[behavior] ??= time;
+        if (time - this.since[behavior]! >= this.options.sustainedMs &&
+            time - (this.emitted[behavior] ?? -Infinity) >= this.options.cooldownMs) {
+          this.emitted[behavior] = time;
+          const value = BEHAVIOR_CATEGORY[behavior];
+          if (!emittedBehaviors[value]) {
+            emittedBehaviors[value] = behavior;
+            pending.push({ type: 'alert', value });
+          }
         }
       }
     }
@@ -302,8 +314,10 @@ export class VisionAnalysis {
       debug.detectors[key] = { state: !this.baseline ? 'Calibrating' : behaviors[key] ? 'Detected' : unknown ? 'Uncertain' : 'Clear',
         reason: reasons[key], activeMs: this.behaviorSince[key] == null ? 0 : time - this.behaviorSince[key] };
     }
-    for (const type of alertTypes) debug.cooldownRemainingMs[type] = Math.max(0,
-      this.options.cooldownMs - (time - (this.emitted[type] ?? -Infinity)));
+    // Per category: time until any of its behaviours could alert again.
+    for (const type of alertTypes) debug.cooldownRemainingMs[type] = Math.min(...alertBehaviors
+      .filter(behavior => BEHAVIOR_CATEGORY[behavior] === type)
+      .map(behavior => Math.max(0, this.options.cooldownMs - (time - (this.emitted[behavior] ?? -Infinity)))));
     debug.detectors.eye_contact = {
       state: !this.baseline ? 'Calibrating' : measurements.headYaw == null || measurements.headPitch == null ? 'Uncertain' : conditions.eye_contact ? 'Detected' : 'Clear',
       reason: 'Head yaw/pitch compared with calibrated baseline; not actual eye tracking',
@@ -318,6 +332,7 @@ export class VisionAnalysis {
       behaviors, diagnostics, debug,
       conditions,
       calibrationBlockers: this.baseline ? [] : calibrationBlockers,
+      alertBehaviors: emittedBehaviors,
     };
   }
 }

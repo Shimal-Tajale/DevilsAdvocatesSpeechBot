@@ -59,6 +59,15 @@ export default function Results() {
     }
   }, [needsLoad, session_id])
 
+  // Earnest says its tip once, right after an analysis (the robot stays green meanwhile).
+  // Reopening a saved session stays quiet.
+  const freshLine = passed?.feedback.robot_line
+  useEffect(() => {
+    if (!freshLine || !('speechSynthesis' in window)) return
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(freshLine))
+  }, [freshLine])
+
   const current = loaded?.key === session_id ? loaded : null
   const result: (SessionResults & Partial<SpeechResponse>) | null =
     passed ?? current?.result ?? (showMock ? mockResultsByVariant[variant] : null)
@@ -165,7 +174,7 @@ export default function Results() {
           <figcaption className="mt-1 text-sm text-muted-foreground">Earnest</figcaption>
         </figure>
 
-        {features.mascotQuestions && session_id && <QuestionCard sessionId={session_id} />}
+        {features.mascotQuestions && session_id && <QuestionCard sessionId={session_id} mode={mode} />}
 
         <section aria-labelledby="scores-heading" className="flex flex-col gap-6 rounded-3xl border-2 border-mode bg-card p-5">
           <h2 id="scores-heading" className="text-xl font-semibold">

@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Check, Loader2, Mic, Pause, Play, RotateCcw, Square, TriangleAlert, Upload } from 'lucide-react'
+import { Check, Download, Loader2, Mic, Pause, Play, RotateCcw, Square, TriangleAlert, Upload } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { createSession, postSpeech } from '@/api'
@@ -120,6 +120,8 @@ export default function Session({ mode }: { mode: ModeId }) {
   const reactionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const {
     state: visionState,
+    mode: visionMode,
+    clip,
     calibration,
     videoRef,
     canvasRef,
@@ -128,6 +130,7 @@ export default function Session({ mode }: { mode: ModeId }) {
     record: visionRecord,
     pause: visionPause,
     stop: visionStop,
+    replay: visionReplay,
   } = useVision((value, detail) => {
     send({ type: 'alert', value, ...(detail && { detail }) })
     if (value === 'eye_contact' || value === 'posture' || value === 'hands') {
@@ -137,6 +140,10 @@ export default function Session({ mode }: { mode: ModeId }) {
     }
   })
   const visionStats = useRef<VisionStats | undefined>(undefined)
+  // Replay mode: an uploaded video played through the vision analysis.
+  // 'uncalibrated': it ended before vision calibrated, so there are no stats to send.
+  const [replay, setReplay] = useState<'none' | 'playing' | 'done' | 'uncalibrated'>('none')
+  const replayStats = useRef<VisionStats | undefined>(undefined)
 
   // The camera and the robot follow the recorder.
   useEffect(() => {
@@ -185,6 +192,8 @@ export default function Session({ mode }: { mode: ModeId }) {
     if (file.size === 0) return setUploadError('That file is empty.')
     const url = URL.createObjectURL(file)
     setUpload({ file, url })
+    setReplay('none')
+    replayStats.current = undefined
     setAnalysis('idle')
     setAnalysisError(null)
     // Read the length from the file so the short-recording warning and the timer work.
@@ -201,7 +210,7 @@ export default function Session({ mode }: { mode: ModeId }) {
       ? 'happy'
       : analysis === 'running'
         ? 'thinking'
-        : recorder.state === 'recording'
+        : recorder.state === 'recording' || replay === 'playing'
           ? (reaction ?? 'listening')
           : 'idle'
 
@@ -236,7 +245,8 @@ export default function Session({ mode }: { mode: ModeId }) {
       const result = await postSpeech(source.blob, {
         session_id: sessionId.current,
         target_length_sec: targetSeconds,
-        vision: source.uploaded ? undefined : visionStats.current, // an uploaded file has no camera stats
+        // An upload has vision stats only if it was played with live coaching.
+        vision: source.uploaded ? replayStats.current : visionStats.current,
       })
       setAnalysis('done')
       const id = sessionId.current
@@ -249,11 +259,26 @@ export default function Session({ mode }: { mode: ModeId }) {
     }
   }
 
+  // Plays the uploaded video with sound while vision watches it; the robot and toasts
+  // react as if it were live. Its stats go out with Analyze.
+  const playWithCoaching = async () => {
+    if (!source?.isVideo) return
+    setReplay('playing')
+    send({ type: 'state', value: 'listening' })
+    send({ type: 'hand', value: 'lower' })
+    const stats = await visionReplay(source.url)
+    replayStats.current = stats
+    send({ type: 'state', value: 'idle' })
+    setReplay(stats ? 'done' : 'uncalibrated')
+  }
+
   const reRecord = () => {
     setAnalysis('idle')
     setAnalysisError(null)
     setUploadError(null)
     visionStats.current = undefined
+    replayStats.current = undefined
+    setReplay('none')
     if (upload) {
       setUpload(null)
       fileInput.current?.click()
@@ -334,14 +359,15 @@ export default function Session({ mode }: { mode: ModeId }) {
             {/* Always mounted so the analysis has a video element; shown once the camera starts. */}
             <div className={visionState === 'off' ? 'hidden' : 'flex w-full max-w-sm flex-col items-center gap-2'}>
               <div className={features.cameraPreview && visionState !== 'unavailable' ? 'relative aspect-[4/3] w-full overflow-hidden rounded-2xl border-2 border-foreground/15 bg-foreground/5' : 'sr-only'}>
+              {/* Mirrored like a mirror for the camera; a replayed file plays the right way round. */}
               <video
                 ref={videoRef}
                 muted
                 playsInline
-                aria-label="Camera preview"
-                className="absolute inset-0 h-full w-full -scale-x-100 object-contain"
+                aria-label={visionMode === 'replay' ? 'Replayed recording' : 'Camera preview'}
+                className={`absolute inset-0 h-full w-full object-contain ${visionMode === 'replay' ? '' : '-scale-x-100'}`}
               />
-              <canvas ref={canvasRef} aria-hidden="true" className={`pointer-events-none absolute inset-0 h-full w-full -scale-x-100 ${showSkeleton ? '' : 'invisible'}`} />
+              <canvas ref={canvasRef} aria-hidden="true" className={`pointer-events-none absolute inset-0 h-full w-full ${visionMode === 'replay' ? '' : '-scale-x-100'} ${showSkeleton ? '' : 'invisible'}`} />
               </div>
               {features.cameraPreview && visionState !== 'unavailable' && <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
                 <input type="checkbox" checked={showSkeleton} onChange={event => setShowSkeleton(event.target.checked)} className="size-4 accent-current" />
@@ -451,10 +477,39 @@ export default function Session({ mode }: { mode: ModeId }) {
               <div className="flex w-full flex-col items-center gap-4">
                 <h2 className="text-xl font-semibold">{source.uploaded ? 'Check your file' : 'Listen back'}</h2>
                 {source.name && <p className="max-w-full truncate text-sm text-muted-foreground">{source.name}</p>}
-                {source.isVideo ? (
+                {replay === 'playing' ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <p role="status" className="font-semibold">Playing with live coaching. Watch Earnest and the robot react.</p>
+                    <Button variant="outline" onClick={() => visionStop()} className="h-11 gap-2 rounded-full border-2 border-foreground/20 bg-card px-5 font-semibold">
+                      <Square className="size-4" aria-hidden /> Stop replay
+                    </Button>
+                  </div>
+                ) : source.isVideo ? (
                   <video controls playsInline src={source.url} className="max-h-64 w-full rounded-2xl bg-black" />
                 ) : (
                   <audio controls src={source.url} className="w-full" />
+                )}
+                {replay === 'done' && (
+                  <p role="status" className="rounded-2xl bg-mint/40 px-4 py-2 text-sm">
+                    Coached replay done: your posture and eye contact will be in the report.
+                  </p>
+                )}
+                {replay === 'uncalibrated' && (
+                  <p role="status" className="rounded-2xl bg-butter/50 px-4 py-2 text-sm">
+                    The replay ended before calibration finished, so the report will not include body language. Recordings should start with a few seconds standing still, hips in frame.
+                  </p>
+                )}
+                {!source.uploaded && clip && (
+                  <a
+                    href={clip.url}
+                    download={clip.name}
+                    className="flex items-center gap-2 rounded-full border-2 border-foreground/20 bg-card px-5 py-2 font-semibold hover:bg-card/80"
+                  >
+                    <Download className="size-4" aria-hidden /> Download video
+                  </a>
+                )}
+                {!source.uploaded && clip && (
+                  <p className="text-sm text-muted-foreground">Save it to replay this exact speech later with Upload a recording.</p>
                 )}
                 {shortRecording && (
                   <p role="status" className="flex items-start gap-2 rounded-2xl bg-butter/50 px-4 py-3 text-left">
@@ -477,7 +532,12 @@ export default function Session({ mode }: { mode: ModeId }) {
                       <Mic className="size-5" aria-hidden /> Record instead
                     </Button>
                   )}
-                  <Button onClick={analyze} className={`${bigButton} bg-mode text-plum hover:bg-mode/85`}>
+                  {source.uploaded && source.isVideo && (replay === 'none' || replay === 'uncalibrated') && (
+                    <Button onClick={playWithCoaching} className={`${bigButton} bg-mode-strong text-on-mode-strong hover:bg-mode-strong/90`}>
+                      <Play className="size-5" aria-hidden /> {replay === 'uncalibrated' ? 'Replay again' : 'Play with live coaching'}
+                    </Button>
+                  )}
+                  <Button onClick={analyze} disabled={replay === 'playing'} className={`${bigButton} bg-mode text-plum hover:bg-mode/85`}>
                     {analysis === 'failed' ? 'Try again' : 'Analyze'}
                   </Button>
                 </div>

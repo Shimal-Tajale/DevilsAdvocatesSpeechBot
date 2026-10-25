@@ -28,9 +28,8 @@ const unsigned long BEEP_MS     = 200;
 const unsigned long FLASH_MS    = 250;
 const unsigned long BUTTON_COOLDOWN_MS = 5000;
 
-const unsigned long RAINBOW_STEP_MS = 20;   // lower = faster rainbow
-const int RAINBOW_HUE_STEP = 2;             // degrees per step (higher = faster)
-const int RAINBOW_BRIGHTNESS = 255;         // 0-255, lower if too bright
+const int IDLE_WHITE = 255;   // idle LED brightness, 0-255; lower if too bright
+const unsigned long THINK_FLASH_MS = 400;   // yellow on/off while the speech is analysed
 
 // ---------- State ----------
 enum State { IDLE, LISTENING, THINKING, SPEAKING };
@@ -50,8 +49,8 @@ unsigned long beepUntil = 0;
 bool lastButton = HIGH;
 unsigned long lastArrival = 0;
 
-int hue = 0;
-unsigned long nextRainbow = 0;
+bool thinkOn = false;
+unsigned long nextThink = 0;
 
 // ---------- Helpers ----------
 void setColor(int r, int g, int b) {
@@ -59,24 +58,6 @@ void setColor(int r, int g, int b) {
   analogWrite(RED_PIN, r);
   analogWrite(GREEN_PIN, g);
   analogWrite(BLUE_PIN, b);
-}
-
-// Hue 0-359 at full saturation -> RGB
-void setHue(int h, int brightness) {
-  h = h % 360;
-  int region = h / 60;
-  int rem = (h % 60) * 255 / 60;     // 0-255 within the region
-  int up = rem, down = 255 - rem;
-  int r = 0, g = 0, b = 0;
-  switch (region) {
-    case 0: r = 255; g = up;   b = 0;    break;  // red -> yellow
-    case 1: r = down; g = 255; b = 0;    break;  // yellow -> green
-    case 2: r = 0;   g = 255;  b = up;   break;  // green -> cyan
-    case 3: r = 0;   g = down; b = 255;  break;  // cyan -> blue
-    case 4: r = up;  g = 0;    b = 255;  break;  // blue -> magenta
-    default: r = 255; g = 0;   b = down; break;  // magenta -> red
-  }
-  setColor(r * brightness / 255, g * brightness / 255, b * brightness / 255);
 }
 
 void lcdRow(int row, String text) {
@@ -103,9 +84,12 @@ void drawStatus() {
 
 void applyState() {
   switch (state) {
-    case IDLE:      setColor(255, 255, 255); break; // white (use 0, 0, 0 for off)
+    case IDLE:      setColor(IDLE_WHITE, IDLE_WHITE, IDLE_WHITE); break;   // white
     case LISTENING: setColor(0, 0, 255);   break;   // blue
-    case THINKING:  setColor(255, 140, 0); break;   // yellow
+    case THINKING:  setColor(255, 140, 0);          // yellow, flashing (see loop())
+                    thinkOn = true;
+                    nextThink = millis() + THINK_FLASH_MS;
+                    break;
     case SPEAKING:  setColor(0, 255, 0);   break;   // green
   }
   drawStatus();
@@ -209,6 +193,13 @@ void loop() {
       nextFlash = now + FLASH_MS;
     }
     if (now >= alertUntil) endAlert();
+  }
+  // Thinking: flash yellow so it reads as busy (paused during alerts)
+  else if (state == THINKING && now >= nextThink) {
+    thinkOn = !thinkOn;
+    if (thinkOn) setColor(255, 140, 0);
+    else         setColor(0, 0, 0);
+    nextThink = now + THINK_FLASH_MS;
   }
 
   // Button: send P:1 once per press (stands in for the PIR)
