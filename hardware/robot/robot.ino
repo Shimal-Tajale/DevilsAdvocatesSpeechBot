@@ -2,7 +2,7 @@
 // Serial: 9600 baud, one line per message, ending in '\n'
 //
 // Laptop -> Arduino:
-//   S:idle (rainbow) | S:listening | S:thinking | S:speaking
+//   S:idle (white) | S:listening | S:thinking | S:speaking
 //   A:<reason>   (posture, hands, eye_contact, too_fast, too_quiet, filler)
 //   L:<text>     (max 16 chars, shown on LCD row 1)
 //   H:1 / H:0    (ignored: no arm servo)
@@ -103,7 +103,7 @@ void drawStatus() {
 
 void applyState() {
   switch (state) {
-    case IDLE:      break;                          // rainbow is drawn in loop()
+    case IDLE:      setColor(255, 255, 255); break; // white (use 0, 0, 0 for off)
     case LISTENING: setColor(0, 0, 255);   break;   // blue
     case THINKING:  setColor(255, 140, 0); break;   // yellow
     case SPEAKING:  setColor(0, 255, 0);   break;   // green
@@ -209,12 +209,6 @@ void loop() {
       nextFlash = now + FLASH_MS;
     }
     if (now >= alertUntil) endAlert();
-  }
-  // Idle: rainbow cycle (paused during alerts)
-  else if (state == IDLE && now >= nextRainbow) {
-    setHue(hue, RAINBOW_BRIGHTNESS);
-    hue = (hue + RAINBOW_HUE_STEP) % 360;
-    nextRainbow = now + RAINBOW_STEP_MS;
   }
 
   // Button: send P:1 once per press (stands in for the PIR)
