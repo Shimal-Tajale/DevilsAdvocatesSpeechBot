@@ -15,7 +15,7 @@ import { useSpeaker } from '@/hooks/useSpeaker'
 import { useVision, type VisionState } from '@/hooks/useVision'
 import type { CalibrationBlocker } from '@/vision'
 import { MODES } from '@/modes'
-import type { Mood, ModeId, VisionStats } from '@/types'
+import type { AlertDetail, Mood, ModeId, VisionStats } from '@/types'
 
 const MIN_SECONDS = 5
 const MAX_UPLOAD_MB = 200
@@ -54,6 +54,18 @@ const BLOCKER_HINT: Record<CalibrationBlocker, string> = {
   face: 'Face the camera so I can see your face.',
   frame_gap: 'The camera is lagging. Close other apps or browser tabs.',
   unstable: 'Hold still for a moment.',
+}
+
+// Earnest's face for a moment after a vision alert, then back to listening.
+const REACTION_MS = 2500
+const ALERT_REACTION: Record<'eye_contact' | 'posture' | 'hands' | AlertDetail, Mood> = {
+  eye_contact: 'bored', // you looked away, so the audience drifts
+  posture: 'bored',
+  slouch: 'bored', // ears droop with you
+  sway: 'confused',
+  hands: 'confused',
+  pockets: 'confused',
+  fidget: 'confused',
 }
 
 const VISION_STATUS: Partial<Record<VisionState, string>> = {
@@ -101,6 +113,8 @@ export default function Session({ mode }: { mode: ModeId }) {
   // Vision alerts go out over /events: the server relays them to the robot and
   // back to this screen's toasts.
   const { toasts, send, dismissToast } = useLiveEvents()
+  const [reaction, setReaction] = useState<Mood | null>(null)
+  const reactionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const {
     state: visionState,
     calibration,
@@ -108,7 +122,14 @@ export default function Session({ mode }: { mode: ModeId }) {
     record: visionRecord,
     pause: visionPause,
     stop: visionStop,
-  } = useVision((value) => send({ type: 'alert', value }))
+  } = useVision((value, detail) => {
+    send({ type: 'alert', value, ...(detail && { detail }) })
+    if (value === 'eye_contact' || value === 'posture' || value === 'hands') {
+      setReaction(ALERT_REACTION[detail ?? value])
+      clearTimeout(reactionTimer.current)
+      reactionTimer.current = setTimeout(() => setReaction(null), REACTION_MS)
+    }
+  })
   const visionStats = useRef<VisionStats | undefined>(undefined)
 
   // The camera and the robot follow the recorder.
@@ -135,7 +156,13 @@ export default function Session({ mode }: { mode: ModeId }) {
     return () => clearInterval(timer)
   }, [analysis])
 
-  useEffect(() => () => clearTimeout(navTimer.current), [])
+  useEffect(
+    () => () => {
+      clearTimeout(navTimer.current)
+      clearTimeout(reactionTimer.current)
+    },
+    [],
+  )
 
   // Release the uploaded file's preview URL when it is replaced or the screen closes.
   const uploadUrl = upload?.url
@@ -168,7 +195,7 @@ export default function Session({ mode }: { mode: ModeId }) {
       : analysis === 'running'
         ? 'thinking'
         : recorder.state === 'recording'
-          ? 'listening'
+          ? (reaction ?? 'listening')
           : 'idle'
 
   const submitSetup = (event: FormEvent) => {

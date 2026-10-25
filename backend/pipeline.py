@@ -127,6 +127,11 @@ class VisionStats(BaseModel):
     hands_alerts: int = Field(0, ge=0)
     eye_contact_alerts: int = Field(0, ge=0)
     eye_contact_pct: float | None = Field(None, ge=0, le=100)  # None = not measured
+    # Which behaviour each posture/hands alert was. Optional: older clients don't send them.
+    slouch_alerts: int | None = Field(None, ge=0)
+    sway_alerts: int | None = Field(None, ge=0)
+    pocket_alerts: int | None = Field(None, ge=0)
+    fidget_alerts: int | None = Field(None, ge=0)
 
 
 class Scores(BaseModel):
@@ -233,7 +238,7 @@ async def run_session(audio: bytes, vision: VisionStats | None = None,
             raise NoSpeechError("No speech detected in the recording")
         metrics = compute_metrics(transcription)
         if vision:
-            metrics.update(vision.model_dump())
+            metrics.update(vision.model_dump(exclude_none=True))
 
         feedback = await get_feedback(transcription["transcript"], metrics, session)
 

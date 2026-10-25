@@ -73,6 +73,11 @@ export interface VisionStats {
   hands_alerts?: number
   eye_contact_alerts?: number
   eye_contact_pct?: number | null // null = not measured
+  // which behaviour each posture/hands alert was
+  slouch_alerts?: number
+  sway_alerts?: number
+  pocket_alerts?: number
+  fidget_alerts?: number
 }
 
 export interface Metrics {
@@ -88,6 +93,10 @@ export interface Metrics {
   hands_alerts?: number
   eye_contact_alerts?: number
   eye_contact_pct?: number | null
+  slouch_alerts?: number // these four only from sessions recorded after they were added
+  sway_alerts?: number
+  pocket_alerts?: number
+  fidget_alerts?: number
   // RUBRIC.md fields the backend does not return yet
   hedge_count?: number
   audible_pct?: number
@@ -133,7 +142,9 @@ export type AlertValue = 'posture' | 'hands' | 'eye_contact' | 'too_fast' | 'too
 export type HandValue = 'raise' | 'lower'
 
 export interface StateEvent { type: 'state'; value: StateValue }
-export interface AlertEvent { type: 'alert'; value: AlertValue }
+// Which behaviour a posture/hands alert was. Optional; the robot ignores it.
+export type AlertDetail = 'slouch' | 'sway' | 'pockets' | 'fidget'
+export interface AlertEvent { type: 'alert'; value: AlertValue; detail?: AlertDetail }
 export interface LcdEvent { type: 'lcd'; value: string } // max 16 chars, robot only
 export interface FeedbackEvent { type: 'feedback'; value: Feedback }
 export interface MetricsEvent { type: 'metrics'; value: Metrics }

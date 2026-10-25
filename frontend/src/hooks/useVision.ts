@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { initializeVision } from '@/vision'
 import type { AlertValue, AnalysisStatus, CalibrationBlocker, VisionController } from '@/vision'
-import type { VisionStats } from '@/types'
+import type { AlertDetail, VisionStats } from '@/types'
 
 // Same version as the npm package. Loaded from Google's CDN so no model files
 // live in the repo; the app needs internet for Deepgram and Gemini anyway.
@@ -45,20 +45,32 @@ export interface Calibration {
   percent: number // 0-100, in steps of 20 so React re-renders rarely
 }
 
-interface Tally {
-  posture: number
-  hands: number
-  eye_contact: number
+interface Tally extends Record<AlertValue | AlertDetail, number> {
   faceFrames: number // calibrated frames where the face was measurable
   awayFrames: number // ...of which the speaker was looking away
 }
 
-const emptyTally = (): Tally => ({ posture: 0, hands: 0, eye_contact: 0, faceFrames: 0, awayFrames: 0 })
+const emptyTally = (): Tally => ({
+  posture: 0, hands: 0, eye_contact: 0,
+  slouch: 0, sway: 0, pockets: 0, fidget: 0,
+  faceFrames: 0, awayFrames: 0,
+})
+
+type Behaviors = NonNullable<AnalysisStatus['behaviors']>
+
+// The module's alerts only say posture/hands; its status (sent just before each
+// alert) says which behaviour is active.
+function detailFor(value: AlertValue, b: Behaviors | undefined): AlertDetail | undefined {
+  if (!b) return undefined
+  if (value === 'posture') return b.swaying && !b.slouching ? 'sway' : 'slouch'
+  if (value === 'hands') return b.possiblePockets ? 'pockets' : 'fidget'
+  return undefined
+}
 
 // Camera + posture analysis alongside a recording. Best effort: if the camera is
 // blocked or the models cannot load, state becomes 'unavailable' and the recording
 // carries on without vision stats. Only time spent recording (not paused) is counted.
-export function useVision(onAlert: (value: AlertValue) => void) {
+export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => void) {
   const [state, setState] = useState<VisionState>('off')
   const [calibration, setCalibration] = useState<Calibration>({ blocker: null, percent: 0 })
   const lastCalibration = useRef('')
@@ -69,6 +81,7 @@ export function useVision(onAlert: (value: AlertValue) => void) {
   const counting = useRef(false) // recording, not paused
   const calibrated = useRef(false)
   const tally = useRef<Tally>(emptyTally())
+  const behaviors = useRef<Behaviors | undefined>(undefined)
   const onAlertRef = useRef(onAlert)
   useEffect(() => {
     onAlertRef.current = onAlert
@@ -92,10 +105,13 @@ export function useVision(onAlert: (value: AlertValue) => void) {
 
     handlers.alert = (value) => {
       if (!counting.current) return
+      const detail = detailFor(value, behaviors.current)
       tally.current[value] += 1
-      onAlertRef.current(value)
+      if (detail) tally.current[detail] += 1
+      onAlertRef.current(value, detail)
     }
     handlers.status = (status) => {
+      behaviors.current = status.behaviors
       if (!status.calibrated) {
         const blocker = BLOCKER_ORDER.find((b) => status.calibrationBlockers.includes(b)) ?? null
         const percent = Math.floor(status.calibrationProgress * 5) * 20
@@ -166,6 +182,10 @@ export function useVision(onAlert: (value: AlertValue) => void) {
       hands_alerts: t.hands,
       eye_contact_alerts: t.eye_contact,
       eye_contact_pct: t.faceFrames ? Math.round(100 * (1 - t.awayFrames / t.faceFrames)) : null,
+      slouch_alerts: t.slouch,
+      sway_alerts: t.sway,
+      pocket_alerts: t.pockets,
+      fidget_alerts: t.fidget,
     }
   }, [release])
 

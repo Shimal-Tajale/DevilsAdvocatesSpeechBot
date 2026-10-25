@@ -85,6 +85,24 @@ export default function Results() {
   const criteria = feedback.criteria
   const confidence = feedback.scores.confidence
 
+  // The camera's tally, only when the browser sent vision stats. Older sessions have
+  // posture/hands totals but not which behaviour each alert was.
+  const bodyRows: [string, string | number][] =
+    typeof metrics.posture_alerts === 'number'
+      ? [
+          ...(typeof metrics.eye_contact_pct === 'number'
+            ? [['Facing the camera', `${Math.round(metrics.eye_contact_pct)}%`] as [string, string]]
+            : []),
+          ['Looked away', metrics.eye_contact_alerts ?? 0],
+          ...(typeof metrics.slouch_alerts === 'number'
+            ? ([['Slouching', metrics.slouch_alerts], ['Swaying', metrics.sway_alerts ?? 0]] as [string, number][])
+            : ([['Posture alerts', metrics.posture_alerts]] as [string, number][])),
+          ...(typeof metrics.pocket_alerts === 'number'
+            ? ([['Hands in pockets', metrics.pocket_alerts], ['Fidgeting', metrics.fidget_alerts ?? 0]] as [string, number][])
+            : ([['Hand alerts', metrics.hands_alerts ?? 0]] as [string, number][])),
+        ]
+      : []
+
   return (
     <div data-mode={mode} className="page-mode min-h-dvh pb-24 text-foreground">
       <main className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-6 sm:px-6 sm:py-10">
@@ -198,9 +216,6 @@ export default function Results() {
               ['Fillers', metrics.fillers],
               ['Long pauses', metrics.pauses],
               ['Speaking time', `${metrics.speaking_time}s`],
-              // from the browser's vision stats, only when they were sent
-              ...(typeof metrics.eye_contact_pct === 'number' ? [['Facing the camera', `${Math.round(metrics.eye_contact_pct)}%`]] : []),
-              ...(typeof metrics.posture_alerts === 'number' ? [['Posture alerts', metrics.posture_alerts]] : []),
             ].map(([name, value]) => (
               <div key={name} className="rounded-2xl bg-muted p-3">
                 <dt className="text-sm text-muted-foreground">{name}</dt>
@@ -209,6 +224,25 @@ export default function Results() {
             ))}
           </dl>
         </section>
+
+        {bodyRows.length > 0 && (
+          <section aria-labelledby="body-heading" className="flex flex-col gap-3 rounded-3xl border border-foreground/10 bg-card p-5">
+            <h2 id="body-heading" className="text-xl font-semibold">
+              Body language
+            </h2>
+            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {bodyRows.map(([name, value]) => (
+                <div key={name} className="rounded-2xl bg-muted p-3">
+                  <dt className="text-sm text-muted-foreground">{name}</dt>
+                  <dd className="font-heading text-2xl font-semibold">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className="text-sm text-muted-foreground">
+              Counted from the camera while you were recording. Each kind of reminder shows at most once every 12 seconds.
+            </p>
+          </section>
+        )}
 
         <section aria-labelledby="transcript-heading" className="flex flex-col gap-3 rounded-3xl border border-foreground/10 bg-card p-5">
           <h2 id="transcript-heading" className="text-xl font-semibold">

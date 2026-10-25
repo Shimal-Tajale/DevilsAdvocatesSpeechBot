@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { connectEvents, type EventsConnection } from '@/api'
 import { TOAST_COOLDOWN_MS, TOAST_VISIBLE_MS } from '@/lib/alerts'
-import type { AlertValue, EventsMessage, StateValue } from '@/types'
+import type { AlertDetail, AlertValue, EventsMessage, StateValue } from '@/types'
 
 export interface Toast {
   id: number
   kind: AlertValue
+  detail?: AlertDetail
 }
 
 // Subscribes to WS /events and keeps the live state the screens need:
@@ -21,13 +22,13 @@ export function useLiveEvents() {
   useEffect(() => {
     const timers = new Set<ReturnType<typeof setTimeout>>()
 
-    const showToast = (kind: AlertValue) => {
+    const showToast = (kind: AlertValue, detail?: AlertDetail) => {
       const now = Date.now()
       const last = lastShown.current[kind]
       if (last !== undefined && now - last < TOAST_COOLDOWN_MS) return // one per kind per 12 s
       lastShown.current[kind] = now
       const id = nextId.current++
-      setToasts((current) => [...current, { id, kind }])
+      setToasts((current) => [...current, { id, kind, detail }])
       const timer = setTimeout(() => {
         timers.delete(timer)
         setToasts((current) => current.filter((t) => t.id !== id))
@@ -44,7 +45,7 @@ export function useLiveEvents() {
           setHandRaised(message.value === 'raise')
           break
         case 'alert':
-          showToast(message.value)
+          showToast(message.value, message.detail)
           break
       }
     }

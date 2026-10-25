@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
-import { ALERT_MESSAGE } from '@/lib/alerts'
+import { ALERT_DETAIL_MESSAGE, ALERT_MESSAGE } from '@/lib/alerts'
 import type { Toast } from '@/hooks/useLiveEvents'
 
 interface AlertToasterProps {
@@ -25,7 +25,7 @@ export function AlertToaster({ toasts, onDismiss }: AlertToasterProps) {
             exit={{ opacity: 0, y: -12 }}
             className="pointer-events-auto flex max-w-sm items-center gap-3 rounded-full border-2 border-coral bg-card py-2 pr-2 pl-4 font-semibold text-plum shadow-[0_6px_0_0_rgba(43,33,64,0.08)]"
           >
-            <span>{ALERT_MESSAGE[toast.kind]}</span>
+            <span>{toast.detail ? ALERT_DETAIL_MESSAGE[toast.detail] : ALERT_MESSAGE[toast.kind]}</span>
             <button
               type="button"
               onClick={() => onDismiss(toast.id)}
