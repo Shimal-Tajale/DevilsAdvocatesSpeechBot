@@ -28,8 +28,8 @@ const PERMISSION_MOOD: Record<PermissionState, Mood> = {
   idle: 'idle',
   asking: 'thinking',
   granted: 'happy',
-  denied: 'confused',
-  unavailable: 'confused',
+  denied: 'idle',
+  unavailable: 'idle',
 }
 
 export default function Home() {
