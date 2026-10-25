@@ -1,252 +1,151 @@
 # API contract: frontend <-> backend
 
-What the frontend needs from the backend, based on `src/types.ts` and `src/api.ts`.
-Where the backend already defines a shape (`backend/`, `docs/Deisgn_Doc.txt`), this file
-uses the backend's shape. Everything else is a proposal for the backend team.
+What the frontend sends and receives. Names are the backend's, exactly: snake_case for every
+field, event and string value, with no aliases. Where the backend code, `docs/Deisgn_Doc.txt` and
+`RUBRIC.md` disagree, the backend code wins and the difference is listed in section 6.
 
-Status of every item:
+Status of each item:
 
-- **[IN BACKEND]** exists today in `backend/`.
-- **[IN BACKEND, STUBBED]** the route and shape exist, but the values are fake constants.
-- **[BACKEND NEEDS TO BUILD]** nothing exists yet. The shape below is the frontend's proposal.
+- **[IN BACKEND]** exists in `backend/` today.
+- **[IN BACKEND, PARTIAL]** exists, but some fields or values are missing.
+- **[BACKEND NEEDS TO BUILD]** nothing exists yet. The shape is what the frontend expects (mostly from `RUBRIC.md`).
 
-Source of truth in code: `src/types.ts` (types) and `src/api.ts` (the only file that talks to the backend).
+Types: `frontend/src/types.ts`. The only code that talks to the backend: `frontend/src/api.ts`
+(`features.useMocks` false, the default = the real backend; true = mocks).
 
 ## 0. Running it
 
-- Start (from the repo root): `uvicorn backend.main:app --port 8000`. Port 8000 is implied (uvicorn default, and `bridge/bridge.py` connects to `ws://localhost:8000/events`). No file sets it, so teammates should confirm.
-- Needs `.env` with `DEEPGRAM_API_KEY` (copy `.env.example`). Without it `POST /speech` returns a 500.
-- CORS is open to all origins, but the browser never calls the backend directly. Only port 80 is exposed through ngrok, so the frontend calls relative URLs and the Vite dev proxy forwards them.
-- **Backend routes have no prefix** (`/sessions`, `/speech`, `/events`). The frontend uses `/api/...` and `/ws/...`. The current proxy forwards the prefix unchanged, so it must be changed to strip it (`rewrite: p => p.replace(/^\/api/, '')`, same for `/ws`). **Frontend TODO, not done yet.**
-  - `/api/sessions` -> `/sessions`
-  - `/api/speech` -> `/speech`
-  - `/ws/events` -> `/events`
+- Backend, from the repo root: `uvicorn backend.main:app --port 8000`. No code sets the port; 8000 is uvicorn's default and what `bridge/bridge.py` connects to.
+- Needs `.env` with `DEEPGRAM_API_KEY` and `GEMINI_API_KEY` (see `.env.example`).
+- Backend routes have no prefix. The browser calls `/api/...` and `/ws/...`, and the Vite proxy in `frontend/vite.config.ts` strips the prefix: `/api/speech` -> `/speech`, `/ws/events` -> `/events`.
 
-## 1. HTTP endpoints
+## 1. HTTP
 
-### 1.1 `POST /sessions` [IN BACKEND]
+| `api.ts` function | Route | Status |
+|---|---|---|
+| `createSession` | `POST /sessions` | [IN BACKEND] |
+| `getSession` | `GET /sessions/{session_id}` | [IN BACKEND] (includes `results`) |
+| `getHistory` | `GET /history/{speaker}` | [IN BACKEND] (includes `results`) |
+| `postSpeech` | `POST /speech` | [IN BACKEND, PARTIAL] |
 
-Create a session. `api.ts`: `startSession(data)`.
+### `POST /sessions`
 
-Request (JSON, all fields required, non-empty after trimming whitespace):
+Request (JSON, all required, whitespace trimmed, non-empty):
+`{ speaker: string, mode: 'presentation' | 'debate' | 'interview', topic: string }`.
+Response `201`: the same fields plus `session_id` (UUID4) and `results: null`. `422` on bad input.
 
-```ts
-interface SessionCreate { speaker: string; mode: string; topic: string }
-```
+`mode` is a free string on the backend. The frontend sends exactly `presentation`, `debate` or `interview`.
 
-Response `201`:
+**Not accepted yet [BACKEND NEEDS TO BUILD]:** `target_length_sec` and `script`. The backend model has only `speaker`, `mode` and `topic`, and silently drops extra fields, so the frontend does not send them. `RUBRIC.md` needs both (`timing` and `script_coverage`).
 
-```ts
-interface Session extends SessionCreate { session_id: string } // UUID4
-```
+### `GET /sessions/{session_id}`
 
-Errors: `422` for missing, empty, whitespace-only or non-string fields.
+`Session` with `results` (null until a recording was posted with this `session_id`), `404 {"detail":"Session not found"}`, `422` for a malformed UUID.
 
-Notes:
-- `mode` is a free string on the backend. The frontend sends its mode id: `publicSpeaking`, `debate` or `interview`. The design doc also lists `Drill`. Backend to confirm accepted values.
-- The frontend has no speaker login. It will send a name from a field on the home or setup screen (or a default such as "Guest").
-- Mode-specific setup does not fit in this request yet. See 1.7.
+### `GET /history/{speaker}`
 
-### 1.2 `GET /sessions/{session_id}` [IN BACKEND]
+`Session[]` (each with `results`, oldest first with Postgres), `[]` for an unknown speaker. The speaker name comes from the name field on the Home screen.
 
-`api.ts`: `getSession(sessionId)`. Response: `Session` (same as above). `404 {"detail":"Session not found"}`, `422` if the id is not a UUID.
+### `POST /speech`
 
-Returns only the setup. It does not return results (see 1.6).
+Request: `multipart/form-data` with file field `audio`, optional form field `session_id` (UUID; `404` if unknown; the results are saved on that session, and sending it again replaces them), and optional form field `vision`, a JSON string of `{ posture_alerts, hands_alerts, eye_contact_alerts, eye_contact_pct }` (non-negative integers, `eye_contact_pct` 0-100 or null; any other key returns `422`).
 
-### 1.3 `GET /history/{speaker}` [IN BACKEND]
-
-`api.ts`: `getHistory(speaker)`. Response: `Session[]`, `[]` for an unknown speaker.
-
-Setups only, no scores, so the History screen (behind the `history` flag) cannot chart progress yet. See 1.8.
-
-### 1.4 `POST /speech` [IN BACKEND, STUBBED]
-
-Upload a finished recording and run the full pipeline. `api.ts`: `analyzeSpeech(audio)`.
-
-Request: `multipart/form-data` with one file field named `audio` (a `MediaRecorder` blob).
-
-Response `200`:
+Response `200`: `{ session_id, saved, transcript, metrics, feedback }`. `session_id` is null without one. `saved` is false when there was no `session_id` or saving failed (for example the database is down); the feedback is returned either way.
 
 ```ts
-interface SpeechResponse {
-  transcript: string
-  metrics: SpeechMetrics
-  feedback: SpeechFeedback
+metrics: {
+  wpm: number; fillers: number; filler_list: string[]
+  pauses: number            // pauses over 2 s
+  longest_pause: number     // seconds
+  speaking_time: number     // seconds, first word to last word
+  // merged in from `vision` when the browser sent it [IN BACKEND]
+  posture_alerts?: number; hands_alerts?: number; eye_contact_alerts?: number
+  eye_contact_pct?: number | null
+  // [BACKEND NEEDS TO BUILD] from RUBRIC.md
+  hedge_count?: number; audible_pct?: number; duration_sec?: number; target_length_sec?: number
 }
-
-interface SpeechMetrics {
-  wpm: number
-  fillers: number
-  filler_list: string[]
-  pauses: number          // pauses over 2 s
-  longest_pause: number   // seconds
-  speaking_time: number   // seconds
-  // browser vision stats (posture alerts, eye-contact %, gesture level) are merged
-  // in by run_session(audio, vision); their key names are not settled
-}
-
-interface SpeechFeedback {
-  scores: { structure: number; clarity: number; delivery: number; persuasion: number; confidence: number } // each 0-10
-  overall: number         // 0-100
+feedback: {
+  scores: { structure; clarity; delivery; persuasion; confidence: number   // whole numbers 0-10
+            body_language?: number }                                        // [BACKEND NEEDS TO BUILD]
+  overall: number           // 0-100
   strengths: string[]
   fixes: string[]
-  robot_line: string      // short line the robot speaks at the end
+  robot_line: string
+  criteria?: { id; category; score; detail; tip }[]                         // [BACKEND NEEDS TO BUILD]
 }
 ```
 
-What is real today:
-- `transcript`: real Deepgram text (nova-3, smart format, filler words on).
-- `metrics`, `feedback`: **fake constants** (`wpm 142`, `fillers 2`, overall 68, and so on). Needs the real metrics code and the AI call (Gemini or Muse).
+Criterion ids (13, from `RUBRIC.md`): `filler_words`, `confident_language`, `relevance`, `pace`, `pauses`, `volume`, `vocal_variety`, `structure`, `timing`, `script_coverage`, `eye_contact`, `posture`, `evidence`. Categories: `structure`, `clarity`, `delivery`, `body_language`, `persuasion` (plus the `confidence` composite, which appears in `scores` only).
 
-Gaps in this endpoint, all **[BACKEND NEEDS TO BUILD]**:
-- Return word timestamps. The pipeline already computes `words: [{word, start, end}]` and `duration` but the response drops them. The frontend needs them for the highlighted transcript and the timeline.
-- Accept a `session_id` (form field) so results can be tied to a session and saved.
-- Accept the browser's vision stats (`run_session` already takes a `vision` dict, but the route never passes one).
-- The route has no field for which question is being answered (see 1.5).
+The frontend renders the category bars from whichever `scores` are present, and the detailed criteria section only when `criteria` is present.
 
-### 1.5 Hand-raise question and answer [BACKEND NEEDS TO BUILD]
+Errors: `400` empty file, `422` no speech detected, `502` the pipeline failed. All carry `{"detail": string}`, which `api.ts` throws as `Error(detail)`.
 
-The mascot raises its hand after the speech, the user "calls on" it, and it asks a question (CLAUDE.md "Mascot behavior"). The design doc plans this as the `hand` event plus an AI-written question and TTS, but nothing is implemented. `api.ts`: `getNextQuestion(sessionId)`.
+Still true today: word timestamps are computed but not returned. The frontend does not send `vision` yet, because the vision module (`frontend/src/vision`) is not wired into a recording screen.
 
-Proposed:
-
-```
-GET /sessions/{session_id}/question
--> 200 { question: string, index: number, total: number } | 204 when there are no more
-```
-
-The answer is audio and should reuse `POST /speech` with `session_id` and `question_index` form fields, returning a `SpeechResponse` scored as a mini-session (design doc: "the speaker's answer is recorded and scored as a mini-session").
-
-Interview mode reuses this same flow, with the question coming first. Debate mode needs rebuttal text from the opponent, which would use the same shape.
-
-### 1.6 Rich results [BACKEND NEEDS TO BUILD]
-
-`api.ts`: `getResults(sessionId)` returns this frontend view model (`Results` in `types.ts`):
-
-```ts
-interface Results {
-  overall: number                // 0-100
-  categories: { id: 'voice' | 'body' | 'content'; score: number }[]
-  criteria: {
-    id: 'filler_words' | 'pace' | 'volume' | 'vocal_variety' | 'pauses' | 'eye_contact' |
-        'posture' | 'relevance' | 'structure' | 'script_coverage' | 'confident_language' | 'timing'
-    category: 'voice' | 'body' | 'content'
-    score: number                // 0-100
-    detail: string               // one line, e.g. "14 fillers (5.2/min)"
-    tip: string
-  }[]
-  transcript: { start: number; text: string; flag?: 'filler' | 'hedge' }[]  // seconds
-  questions: string[]
-}
-```
-
-```
-GET /sessions/{session_id}/results -> 200 Results | 404
-```
-
-This does not exist and conflicts with what the backend settled on: the backend has 5 scores on a 0-10 scale (`structure`, `clarity`, `delivery`, `persuasion`, `confidence`), flat `strengths`/`fixes` lists, and a plain-string transcript. Decision needed from the team:
-
-- Option A (frontend adapts): the frontend builds its Results screen from `SpeechResponse` (5 scores, strengths first, fixes, transcript with filler words highlighted using `words` and `metrics.filler_list`). The 12-criterion scoring is cut.
-- Option B (backend extends): the backend returns the `Results` shape above, either as an extra block on the speech response or from this endpoint.
-
-Until then the frontend keeps `Results` and its mock so the Results screen can be built either way.
-
-### 1.7 Per-mode setup fields [BACKEND NEEDS TO BUILD]
-
-`SessionCreate` has only `speaker`, `mode` and `topic`. The setup screens collect more, and the backend would need to accept and store them (for prompts and scoring). Proposed optional fields on `POST /sessions`:
-
-```ts
-interface PublicSpeakingSetup { topic: string; targetMinutes: number; script?: string }
-interface DebateSetup { motion: string; side: 'for' | 'against'; difficulty: 'easy' | 'medium' | 'hard' }
-interface InterviewSetup {
-  jobDescription: string; company?: string; role?: string
-  questionTypes: string[]; questionCount: number; feedbackTiming: 'each' | 'end'
-}
-```
-
-Suggested: send these as a `setup` object next to `speaker`, `mode`, `topic`, and return it unchanged on `GET /sessions/{id}`. Until then the frontend sends only the three required fields and uses `topic` for the main subject (public speaking topic, debate motion, interview role or job).
-
-### 1.8 History with scores [BACKEND NEEDS TO BUILD]
-
-`GET /history/{speaker}` should include each session's overall score and date so the progress chart (stretch goal, `history` flag is off) has data. The design doc plans `sessions(id, speaker, mode, topic, started_at, overall_score)` in Postgres. Sessions are in-memory today and are lost on restart.
+Storage: Postgres when `DATABASE_URL` is set, otherwise an in-memory store that is lost on restart. Results rebuilt from Postgres contain `transcript`, `metrics` and `feedback` without `criteria`, and `overall` comes from the stored score.
 
 ## 2. WebSocket `/events` [IN BACKEND]
 
-One shared two-way event bus. Any JSON message a client sends is rebroadcast to every connected client, including the sender. Frontend URL: `/ws/events` (built from `window.location` in `api.ts`: `eventsSocketUrl()`). There is no session id and no per-session routing, so every client sees every event.
+One shared two-way bus. Any JSON message a client sends is rebroadcast to every client, including the sender. `connectEvents(onMessage)` returns `{ send, close }`. No session id, no per-session routing.
 
-Every message is `{ "type": string, "value": ... }`:
+Every message is `{ "type", "value" }`:
 
-```ts
-type LiveEvent =
-  | { type: 'state'; value: 'idle' | 'listening' | 'thinking' | 'speaking' }
-  | { type: 'alert'; value: 'posture' | 'hands' | 'eye_contact' | 'too_fast' | 'too_quiet' | 'filler' }
-  | { type: 'lcd'; value: string }                          // max 16 chars, robot only
-  | { type: 'feedback'; value: SpeechFeedback }
-  | { type: 'metrics'; value: SpeechMetrics }
-  | { type: 'hand'; value: 'raise' | 'lower' }
-  | { type: 'user_present'; value: null }
-```
-
-| Event | Direction | Status | Frontend does |
+| type | value | sent by | status |
 |---|---|---|---|
-| `state` | server -> client | [IN BACKEND, PARTIAL] `/speech` sends `thinking`, `speaking`, `idle`. `listening` is in the contract but nothing sends it. | Drives mascot mood (see 3.1). |
-| `alert` | browser -> server -> all | [IN BACKEND] relay only. The server never creates alerts. | The browser **sends** `posture`, `hands`, `eye_contact` from the vision module (`frontend/src/vision`) and `too_fast`, `too_quiet`, `filler` from audio checks. It **receives** alerts to pulse the indicator rail and move the mascot. |
-| `metrics` | server -> client | [IN BACKEND, STUBBED] sent by `/speech`. | Optional: charts. The HTTP response carries the same data. |
-| `feedback` | server -> client | [IN BACKEND, STUBBED] sent by `/speech`. | Optional: same data as the HTTP response. |
-| `lcd` | server -> client | [IN BACKEND] | Ignored (robot only). |
-| `hand` | server -> client | [BACKEND NEEDS TO BUILD] the bridge handles it, but nothing sends it. | `raise` puts the mascot in `handRaised` and shows the "Call on mascot" button. `lower` ends it. |
-| `user_present` | bridge -> server -> all | [IN BACKEND] relay only, sent by the bridge from the sensor. | Optional: opens the session screen. |
+| `state` | `idle` / `listening` / `thinking` / `speaking` | server | [IN BACKEND, PARTIAL] `/speech` sends `thinking`, `speaking`, `idle`; nothing sends `listening` |
+| `alert` | `posture` / `hands` / `eye_contact` / `too_fast` / `too_quiet` / `filler` | browser (vision, audio) | [IN BACKEND] relay only; the server never creates alerts |
+| `lcd` | string, max 16 chars | server | [IN BACKEND] robot only, the frontend ignores it |
+| `feedback` | the feedback object | server | [IN BACKEND] sent by `/speech` |
+| `metrics` | the metrics object | server | [IN BACKEND] sent by `/speech` |
+| `hand` | `raise` / `lower` | server | [BACKEND NEEDS TO BUILD] the bridge handles it, nothing sends it; the frontend sends `lower` when the user clicks Take question |
+| `user_present` | `null` | bridge | [IN BACKEND] relay only |
 
-Rules from the design doc, to keep in mind in the browser: an alert needs about 2 s of sustained behavior, and at most one alert of each kind every 12 s. The vision module already follows both.
+Frontend behavior:
 
-### 2.1 Live indicators [BACKEND NEEDS TO BUILD]
+- `state` values map straight onto the mascot `mood` prop. `hand: raise` shows `handRaised` (and the **Take question** button) until `hand: lower`.
+- `confused`, `bored` and `happy` are frontend-only moods; the backend never sends them.
+- Alert toasts: at most one per alert kind every 12 seconds.
+- The browser sends `posture`, `hands` and `eye_contact` from `frontend/src/vision`, and `too_quiet` from Web Audio. `too_fast` and `filler` need streaming speech-to-text (`WS /stream`, not built).
 
-The live rail wants four indicators (filler words, pace, volume, eye contact). The backend only relays threshold alerts (`filler`, `too_fast`, `too_quiet`, `eye_contact`), with no numbers. The frontend plan:
+## 3. Needed by the frontend, not in the backend
 
-- Filler counter: increment on each `filler` alert.
-- Pace / volume: show warn state on `too_fast` / `too_quiet`. A real speedometer or volume level needs live numbers. Volume can come from the Web Audio API in the browser. Live pace needs the stretch `WS /stream` (live audio to Deepgram), which does not exist.
-- Eye contact: from the vision module, in the browser.
+- `target_length_sec` and `script` on `POST /sessions` (timing, script coverage).
+- `body_language` in `scores`, the `criteria` array, and the extra metrics (`hedge_count`, `audible_pct`, `eye_contact_pct`, `posture_alerts`, `duration_sec`, `target_length_sec`).
+- `overall` computed in code from the `RUBRIC.md` weights (today Gemini returns it).
+- `hand: raise` events and a question endpoint for the mascot Q&A, plus scoring of the answer.
+- Interview and debate flows (question generation, rebuttals).
+- Nothing else for sessions: `session_id`, saved results and history scores are now in the backend.
+- Word timestamps in the `/speech` response (for a timeline).
+- Live pace and volume numbers (`WS /stream`).
 
-No new backend work is needed for the alert-only version.
+## 4. Frontend work that depends on this
 
-## 3. Frontend-only (no backend work)
+The Start screen asks for a speaker name; no setup screen creates a session yet, so `createSession` is only called by the dev recording tool. The Results screen shows a `POST /speech` response (router state), a saved session at `/results/:session_id`, or the mock at `/results` when `useMocks` is true.
 
-### 3.1 Mascot mood
+## 5. Dev tools
 
-The mascot mood is a frontend concept. The backend has no mood event, and the earlier proposal for `{type:'mood'}` was dropped. The frontend derives the mood:
+In development only, Home shows two bars: dev moods, and dev events (send `state`, `hand` and `alert` messages over the same bus, record a test speech, and open the mock Results screen). "record test speech (real backend)" records from the microphone, calls `createSession`, then `postSpeech` with the `session_id`, then opens `/results/:session_id`. It needs the backend running with `DEEPGRAM_API_KEY` and `GEMINI_API_KEY`.
 
-| Source | Mood |
-|---|---|
-| `state: idle` | `idle` |
-| `state: listening` or recording | `listening` |
-| `state: thinking` | `thinking` |
-| `state: speaking` | `speaking` |
-| `hand: raise` | `handRaised` |
-| `alert: filler` | brief head tilt while `listening` |
-| `alert: eye_contact` | `confused` or `bored` |
-| feedback with a high score | `happy` |
+## 6. Where the backend code and the docs disagree
 
-### 3.2 Not in the contract
-
-Not-real endpoints from older drafts have been removed: `submitAnswer`, `GET /sessions/{id}` returning results, and a per-session socket `/ws/live/{id}`.
-
-## 4. Summary
-
-| Item | Status |
-|---|---|
-| `POST /sessions` | IN BACKEND |
-| `GET /sessions/{id}` | IN BACKEND (setup only) |
-| `GET /history/{speaker}` | IN BACKEND (setups only) |
-| `POST /speech` | IN BACKEND, STUBBED (real transcript, fake metrics and feedback) |
-| `WS /events` relay | IN BACKEND |
-| Events `state`, `alert`, `lcd`, `feedback`, `metrics`, `user_present` | IN BACKEND |
-| Word timestamps in the `/speech` response | BACKEND NEEDS TO BUILD |
-| `session_id` and vision stats on `/speech` | BACKEND NEEDS TO BUILD |
-| Real metrics and AI feedback | BACKEND NEEDS TO BUILD |
-| `hand` event, mascot question endpoint, answer scoring | BACKEND NEEDS TO BUILD |
-| Rich results (12 criteria, categories, flagged transcript) | BACKEND NEEDS TO BUILD (or frontend adapts, see 1.6) |
-| Per-mode setup fields | BACKEND NEEDS TO BUILD |
-| History with scores, persistence | BACKEND NEEDS TO BUILD |
-| `listening` state sent by the server | BACKEND NEEDS TO BUILD |
-| Live pace and volume numbers (`WS /stream`) | BACKEND NEEDS TO BUILD (stretch) |
-| Proxy prefix stripping (`/api`, `/ws`) | FRONTEND TODO |
+| Topic | Docs say | Backend code does | Followed |
+|---|---|---|---|
+| Metric names | `RUBRIC.md` and the design doc database use `filler_count`, `pause_count`, `longest_pause_sec`; the event contract table uses `fillers`, `pauses` | returns `fillers`, `pauses`, `longest_pause`, `speaking_time`, `wpm`, `filler_list` | backend |
+| Duration | `duration_sec` | returns `speaking_time`; the transcription `duration` is not in the response | backend, `duration_sec` kept as optional "not returned yet" |
+| `scores` | six keys including `body_language` (`RUBRIC.md`) | five keys, no `body_language`; the Gemini schema has the same five | backend, `body_language` optional |
+| `criteria` | optional array in the feedback | not present | optional |
+| `overall` | computed in code from weights (`RUBRIC.md`) | Gemini returns it | backend |
+| Speech-to-text | design doc: nova-3 | nova-2 (nova-3 drops "um" and "uh") | backend |
+| Sessions input | `RUBRIC.md`: `target_length_sec`, `script` | only `speaker`, `mode`, `topic` | backend |
+| Storage | Postgres | Postgres when `DATABASE_URL` is set, else in memory (lost on restart); a failed save returns `saved: false` instead of an error; `schemas.py` is empty | backend |
+| Session results | `GET /sessions/{id}` returns full results | now does: `results` holds `transcript`, `metrics`, `feedback` once `/speech` ran with the `session_id` | match |
+| Vision stats | merged into the metrics | `vision` form field with `posture_alerts`, `hands_alerts`, `eye_contact_alerts`, `eye_contact_pct`; the browser must tally them from the alerts | backend |
+| Text-to-speech | Deepgram Aura / browser | none; the browser would speak `robot_line` | backend |
+| AI provider | Gemini or Muse switch | `AI_PROVIDER=muse` raises `NotImplementedError` | backend |
+| Gemini models | one model | tries `gemini-3.5-flash-lite`, `gemini-3.8-flash`, `gemini-2.5-flash` in order | backend |
+| Error handling | none described | `/speech` returns 400, 422 or 502; sends `lcd: "Try again"` on failure; always ends with `state: idle` | backend |
+| Event timing | `state: thinking` then results | after a successful run `state: idle` is sent last, from a `finally` block | backend |
+| `listening` / `hand` / `alert` | server sends them | server never sends them (relay only) | backend |
+| Frontend framework | design doc: Ionic (the architecture diagram says Next.js) | n/a, the frontend is React + Vite | n/a |
+| Vision alert values | design doc lists `posture`, `hands`, `eye_contact` | the vision module emits exactly those three | match |

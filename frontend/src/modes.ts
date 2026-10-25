@@ -1,5 +1,5 @@
 import { Gavel, Mic, Briefcase, type LucideIcon } from 'lucide-react'
-import type { ModeId } from './features'
+import type { ModeId } from './types'
 
 export interface ModeConfig {
   id: ModeId
@@ -14,8 +14,8 @@ export interface ModeConfig {
 // Each mode is a configuration of shared components, not its own page.
 export const MODES: ModeConfig[] = [
   {
-    id: 'publicSpeaking',
-    path: '/public-speaking',
+    id: 'presentation',
+    path: '/presentation',
     title: 'Public speaking',
     description: 'Give a talk and I will listen. Then I will raise my paw with a question.',
     Icon: Mic,

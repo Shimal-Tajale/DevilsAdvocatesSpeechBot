@@ -1,118 +1,206 @@
-// The ONLY file that talks to the backend. Every function is mocked for now.
-// Later, replace the mock bodies with fetch('/api/...') calls (relative URLs,
-// proxied by Vite) and nothing else changes. Never hardcode localhost or ports.
+// The ONLY file that talks to the backend. Names match the backend exactly.
+// features.useMocks false (the default): the real backend, reached through the Vite
+// proxy with relative URLs (/api/..., /ws/...), never a hardcoded host or port.
+// features.useMocks true: every function returns mock data. See API_CONTRACT.md.
+import { features } from './features'
 import type {
-  LiveEvent,
-  Results,
+  EventsMessage,
   Session,
   SessionCreate,
+  SessionResults,
   SpeechResponse,
+  VisionStats,
 } from './types'
-
-// Real routes (see API_CONTRACT.md). The dev proxy maps /api/* and /ws/* to the
-// backend root, so POST /api/sessions reaches the backend's POST /sessions.
 
 const delay = <T>(value: T, ms = 600): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), ms))
 
-// POST /sessions -- already in the backend
-export function startSession(data: SessionCreate): Promise<Session> {
-  return delay({ session_id: 'mock-session-1', ...data })
+async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`/api${path}`, init)
+  if (!response.ok) {
+    let detail = response.statusText
+    try {
+      const body = await response.json()
+      if (typeof body?.detail === 'string') detail = body.detail
+    } catch {
+      // keep the status text
+    }
+    throw new Error(detail)
+  }
+  return response.json() as Promise<T>
 }
 
-// GET /sessions/{session_id} -- already in the backend (returns the setup only)
-export function getSession(sessionId: string): Promise<Session> {
-  return delay({ session_id: sessionId, speaker: 'Guest', mode: 'publicSpeaking', topic: 'Mock topic' })
+// ---- sessions ----
+
+const mockSessions: Session[] = []
+
+// POST /sessions
+export function createSession(data: SessionCreate): Promise<Session> {
+  if (!features.useMocks) {
+    return http<Session>('/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+  }
+  const session: Session = { session_id: crypto.randomUUID(), ...data, results: null }
+  mockSessions.push(session)
+  return delay(session)
 }
 
-// GET /history/{speaker} -- already in the backend (setups only, no scores)
-export function getHistory(_speaker: string): Promise<Session[]> {
-  return delay([])
+// GET /sessions/{session_id}
+export function getSession(session_id: string): Promise<Session> {
+  if (!features.useMocks) return http<Session>(`/sessions/${encodeURIComponent(session_id)}`)
+  const found = mockSessions.find((s) => s.session_id === session_id)
+  return found ? delay(found) : Promise.reject(new Error('Session not found'))
 }
 
-// POST /speech (multipart field "audio") -- already in the backend, but metrics
-// and feedback are still fake there
-export function analyzeSpeech(_audio?: Blob): Promise<SpeechResponse> {
-  return delay(mockSpeech, 1200)
+// GET /history/{speaker}
+export function getHistory(speaker: string): Promise<Session[]> {
+  if (!features.useMocks) return http<Session[]>(`/history/${encodeURIComponent(speaker)}`)
+  return delay(mockSessions.filter((s) => s.speaker === speaker))
 }
 
-// NOT in the backend yet: rich results (12 criteria, categories, flagged transcript)
-export function getResults(_sessionId: string): Promise<Results> {
-  return delay(mockResults, 900)
+// ---- speech ----
+
+export interface PostSpeechOptions {
+  session_id?: string // saves the results on that session (404 if it does not exist)
+  vision?: VisionStats // the browser's tally of vision alerts, merged into the metrics
 }
 
-// NOT in the backend yet: mascot follow-up question (hand-raise Q&A)
-export function getNextQuestion(_sessionId: string): Promise<string> {
-  return delay('You mentioned your main point. Can you expand on that?')
+// POST /speech (multipart: file field "audio", optional form fields "session_id" and
+// "vision" as a JSON string). The real backend also broadcasts state/metrics/feedback/lcd
+// events while it works; the mock does the same.
+export function postSpeech(audio: Blob, options: PostSpeechOptions = {}): Promise<SpeechResponse> {
+  if (!features.useMocks) {
+    const form = new FormData()
+    form.append('audio', audio, 'speech.webm')
+    if (options.session_id) form.append('session_id', options.session_id)
+    if (options.vision) form.append('vision', JSON.stringify(options.vision))
+    return http<SpeechResponse>('/speech', { method: 'POST', body: form })
+  }
+  return mockSpeechRun(options)
 }
 
-// Builds the WebSocket URL from window.location so it works through ngrok.
-// Backend path is /events; the /ws prefix is stripped by the dev proxy.
-export function eventsSocketUrl(): string {
+// ---- WS /events ----
+
+export interface EventsConnection {
+  send: (message: EventsMessage) => void
+  close: () => void
+}
+
+// Built from window.location so it works through ngrok (wss when the page is https).
+function eventsSocketUrl(): string {
   const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${scheme}//${window.location.host}/ws/events`
 }
 
-// WS /events, receiving. Mock: emits a few backend-shaped events on a timer.
-// Returns an unsubscribe function.
-export function subscribeLive(onEvent: (event: LiveEvent) => void): () => void {
-  const events: LiveEvent[] = [
-    { type: 'state', value: 'listening' },
-    { type: 'alert', value: 'filler' },
-    { type: 'alert', value: 'too_fast' },
-    { type: 'alert', value: 'eye_contact' },
-    { type: 'state', value: 'thinking' },
-    { type: 'state', value: 'speaking' },
-    { type: 'state', value: 'idle' },
-  ]
-  const timers = events.map((e, i) => setTimeout(() => onEvent(e), 1500 * (i + 1)))
-  return () => timers.forEach(clearTimeout)
+// Connects to the shared event bus. Like the backend, every sent message is delivered
+// to every connection, including the sender's.
+export function connectEvents(onMessage: (message: EventsMessage) => void): EventsConnection {
+  if (features.useMocks) {
+    mockListeners.add(onMessage)
+    return {
+      send: (message) => mockBroadcast(message),
+      close: () => void mockListeners.delete(onMessage),
+    }
+  }
+
+  let socket: WebSocket | null = null
+  let closed = false
+  let retry: ReturnType<typeof setTimeout> | undefined
+  const open = () => {
+    socket = new WebSocket(eventsSocketUrl())
+    socket.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data)
+        if (typeof message?.type === 'string') onMessage(message as EventsMessage)
+      } catch {
+        // ignore messages that are not JSON
+      }
+    }
+    socket.onclose = () => {
+      if (!closed) retry = setTimeout(open, 2000)
+    }
+  }
+  open()
+  return {
+    send: (message) => {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
+    },
+    close: () => {
+      closed = true
+      clearTimeout(retry)
+      socket?.close()
+    },
+  }
 }
 
-// WS /events, sending. The browser sends alerts (vision, volume) and the backend
-// rebroadcasts them to everyone. Mock: no-op.
-export function sendEvent(_event: LiveEvent): void {}
+// ---- mocks ----
 
-const mockSpeech: SpeechResponse = {
-  transcript: 'Um, so today I want to talk about, uh, why sleep matters.',
-  metrics: { wpm: 142, fillers: 2, filler_list: ['um', 'uh'], pauses: 1, longest_pause: 2.4, speaking_time: 45.0 },
-  feedback: {
-    scores: { structure: 7, clarity: 8, delivery: 6, persuasion: 7, confidence: 6 },
-    overall: 68,
-    strengths: ['Strong opening hook'],
-    fixes: ["Cut 'um' before key points", 'Pause after your main claim'],
-    robot_line: 'Great hook! Next time, slow down in the middle.',
+const mockListeners = new Set<(message: EventsMessage) => void>()
+
+function mockBroadcast(message: EventsMessage) {
+  queueMicrotask(() => mockListeners.forEach((listener) => listener(message)))
+}
+
+async function mockSpeechRun(options: PostSpeechOptions): Promise<SpeechResponse> {
+  mockBroadcast({ type: 'state', value: 'thinking' })
+  await delay(null, 1200)
+  mockBroadcast({ type: 'metrics', value: mockResults.metrics })
+  mockBroadcast({ type: 'feedback', value: mockResults.feedback })
+  mockBroadcast({ type: 'lcd', value: `Score: ${mockResults.feedback.overall}/100` })
+  mockBroadcast({ type: 'state', value: 'speaking' })
+  setTimeout(() => mockBroadcast({ type: 'state', value: 'idle' }), 1500)
+  const session = mockSessions.find((s) => s.session_id === options.session_id)
+  if (options.session_id && !session) throw new Error('Session not found')
+  if (session) session.results = mockResults
+  return { ...mockResults, session_id: session?.session_id ?? null, saved: !!session }
+}
+
+// Mock data follows the real backend, plus the fields the backend does not return yet
+// (body_language, criteria, extra metrics) so the whole Results screen can be previewed.
+const mockResults: SessionResults = {
+  transcript:
+    "Um, so today I want to talk about, uh, why sleep matters. I think maybe the biggest reason is memory. Like, when you sleep, your brain replays the day. Um, students who sleep eight hours remember about forty percent more, uh, than students who don't. So tonight, try going to bed thirty minutes earlier.",
+  metrics: {
+    wpm: 168,
+    fillers: 14,
+    filler_list: ['um', 'uh', 'um', 'like', 'um', 'uh', 'you know', 'um', 'uh', 'like', 'um', 'um', 'uh', 'um'],
+    pauses: 2,
+    longest_pause: 3.1,
+    speaking_time: 160,
+    hedge_count: 6,
+    audible_pct: 86,
+    eye_contact_pct: 63,
+    posture_alerts: 1,
+    duration_sec: 170,
+    target_length_sec: 180,
   },
-}
-
-const mockResults: Results = {
-  overall: 78,
-  categories: [
-    { id: 'voice', score: 71 },
-    { id: 'body', score: 84 },
-    { id: 'content', score: 80 },
-  ],
-  criteria: [
-    { id: 'filler_words', category: 'voice', score: 64, detail: '14 fillers (5.2/min)', tip: "Try pausing instead of saying 'um'." },
-    { id: 'pace', category: 'voice', score: 72, detail: '168 words per minute', tip: 'Slow down a little on key points.' },
-    { id: 'volume', category: 'voice', score: 85, detail: 'Clear and steady', tip: 'Keep it up.' },
-    { id: 'vocal_variety', category: 'voice', score: 66, detail: 'Some monotone stretches', tip: 'Vary your pitch on important words.' },
-    { id: 'pauses', category: 'voice', score: 68, detail: '3 long pauses', tip: 'Use short pauses to let ideas land.' },
-    { id: 'eye_contact', category: 'body', score: 88, detail: 'Looked at the camera 88% of the time', tip: 'Great, keep it natural.' },
-    { id: 'posture', category: 'body', score: 80, detail: 'Upright with slight swaying', tip: 'Plant your feet to stay steady.' },
-    { id: 'relevance', category: 'content', score: 86, detail: 'Stayed on topic', tip: 'Tie each story back to your main point.' },
-    { id: 'structure', category: 'content', score: 78, detail: 'Clear intro and body, short conclusion', tip: 'End with one memorable takeaway.' },
-    { id: 'script_coverage', category: 'content', score: 74, detail: '5 of 7 key points covered', tip: 'Cover the two missed points earlier.' },
-    { id: 'confident_language', category: 'content', score: 76, detail: '6 hedges', tip: "Swap 'I think maybe' for a direct statement." },
-    { id: 'timing', category: 'content', score: 86, detail: '4:40 of a 5:00 target', tip: 'Nicely on time.' },
-  ],
-  transcript: [
-    { start: 0.4, text: 'Hello' },
-    { start: 0.9, text: 'everyone' },
-    { start: 3.2, text: 'um', flag: 'filler' },
-    { start: 4.1, text: 'I' },
-    { start: 4.3, text: 'think', flag: 'hedge' },
-    { start: 4.6, text: 'maybe', flag: 'hedge' },
-  ],
-  questions: ['You mentioned X. Can you expand on that?'],
+  feedback: {
+    scores: { structure: 8, clarity: 6, delivery: 7, body_language: 8, persuasion: 6, confidence: 7 },
+    overall: 71,
+    strengths: ['Strong opening hook that tells us why sleep matters', 'You finished right on time'],
+    fixes: [
+      "Cut the 'um' before 'the biggest reason is memory'",
+      "Back up 'forty percent more' with a source or example",
+      "Pause after 'try going to bed thirty minutes earlier' so it lands",
+    ],
+    robot_line: 'Great hook! Next time, pause instead of saying um.',
+    criteria: [
+      { id: 'filler_words', category: 'clarity', score: 4, detail: '14 fillers (5.3 per minute)', tip: "Pause instead of saying 'um' before a key point." },
+      { id: 'confident_language', category: 'clarity', score: 6, detail: '6 hedges (2.2 per minute)', tip: "Swap 'I think maybe' for a direct statement." },
+      { id: 'relevance', category: 'clarity', score: 8, detail: 'Every section served the topic', tip: 'Keep tying each point back to sleep and memory.' },
+      { id: 'pace', category: 'delivery', score: 8, detail: '168 words per minute', tip: 'Slow down slightly on your main claim.' },
+      { id: 'pauses', category: 'delivery', score: 6, detail: '2 pauses over 2 s, longest 3.1 s', tip: 'Keep pauses short unless they follow a big point.' },
+      { id: 'volume', category: 'delivery', score: 8, detail: '86% of speaking time at an audible level', tip: 'Keep your volume steady at the ends of sentences.' },
+      { id: 'vocal_variety', category: 'delivery', score: 5, detail: 'Some variation with flat stretches', tip: 'Stress the number when you say forty percent.' },
+      { id: 'structure', category: 'structure', score: 8, detail: 'Hook, points and a closing ask are all present', tip: 'Make the closing line a little stronger.' },
+      { id: 'timing', category: 'structure', score: 10, detail: '170 s of a 180 s target', tip: 'Nicely on time.' },
+      { id: 'script_coverage', category: 'structure', score: 6, detail: 'Most script points covered, one rushed', tip: 'Spend a full sentence on the second point.' },
+      { id: 'eye_contact', category: 'body_language', score: 8, detail: '63% of the time facing the camera', tip: 'Look at the camera when you state your main claim.' },
+      { id: 'posture', category: 'body_language', score: 8, detail: '1 sustained posture alert', tip: 'Plant your feet to stay steady.' },
+      { id: 'evidence', category: 'persuasion', score: 6, detail: 'One claim only asserted', tip: 'Name where the forty percent comes from.' },
+    ],
+  },
 }

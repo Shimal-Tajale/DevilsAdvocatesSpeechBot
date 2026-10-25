@@ -1,6 +1,8 @@
-// Keep in sync with API_CONTRACT.md. Types marked "backend" mirror what the Python
-// server already returns; types marked "frontend" are view models the backend does
-// not provide yet (see API_CONTRACT.md for which is which).
+// Everything that crosses the wire uses the backend's names exactly (snake_case for
+// fields, events and string values). camelCase is only for local React names.
+// Keep in sync with API_CONTRACT.md and RUBRIC.md.
+
+// ---- frontend-only: mascot mood prop ----
 
 export const MOODS = [
   'idle',
@@ -15,99 +17,130 @@ export const MOODS = [
 
 export type Mood = (typeof MOODS)[number]
 
-export type CategoryId = 'voice' | 'body' | 'content'
+// ---- modes ----
+
+export type ModeId = 'presentation' | 'debate' | 'interview'
+
+// ---- sessions: POST /sessions, GET /sessions/{id}, GET /history/{speaker} ----
+// The backend only accepts these three fields today. target_length_sec and script
+// are not accepted yet (extra fields are silently dropped), so they are not sent.
+
+export interface SessionCreate {
+  speaker: string
+  mode: ModeId
+  topic: string
+}
+
+export interface Session extends SessionCreate {
+  session_id: string // UUID4
+  // Set by POST /speech when it is sent with this session_id; null until then.
+  results: SessionResults | null
+}
+
+// ---- scoring (RUBRIC.md) ----
+
+export type CategoryId = 'structure' | 'clarity' | 'delivery' | 'body_language' | 'persuasion'
 
 export type CriterionId =
   | 'filler_words'
+  | 'confident_language'
+  | 'relevance'
   | 'pace'
+  | 'pauses'
   | 'volume'
   | 'vocal_variety'
-  | 'pauses'
+  | 'structure'
+  | 'timing'
+  | 'script_coverage'
   | 'eye_contact'
   | 'posture'
-  | 'relevance'
-  | 'structure'
-  | 'script_coverage'
-  | 'confident_language'
-  | 'timing'
-
-export interface CategoryScore {
-  id: CategoryId
-  score: number
-}
+  | 'evidence'
 
 export interface CriterionScore {
   id: CriterionId
   category: CategoryId
-  score: number
-  detail: string
-  tip: string
+  score: number // whole number 0-10
+  detail: string // states the measured number
+  tip: string // one concrete action
 }
 
-export type TranscriptFlag = 'filler' | 'hedge'
+// ---- POST /speech response ----
 
-export interface TranscriptWord {
-  start: number // seconds from session start
-  text: string
-  flag?: TranscriptFlag
+// What the browser tallies from the vision module's alerts during a speech. Sent with
+// POST /speech as the JSON form field `vision`. The backend rejects unknown keys.
+export interface VisionStats {
+  posture_alerts?: number
+  hands_alerts?: number
+  eye_contact_alerts?: number
+  eye_contact_pct?: number | null // null = not measured
 }
 
-// frontend view model: the backend does not return this yet (API_CONTRACT.md, section 3.2)
-export interface Results {
-  overall: number
-  categories: CategoryScore[]
-  criteria: CriterionScore[]
-  transcript: TranscriptWord[]
-  questions: string[]
-}
-
-// ---- backend: POST /speech response (backend/pipeline.py run_session) ----
-
-export interface SpeechMetrics {
+export interface Metrics {
+  // always returned by the backend
   wpm: number
   fillers: number
   filler_list: string[]
   pauses: number // pauses over 2 s
   longest_pause: number // seconds
-  speaking_time: number // seconds
-  // Browser vision stats are merged in here by run_session, shape not settled yet.
-  [vision: string]: unknown
+  speaking_time: number // seconds, first word to last word
+  // merged in from the vision stats, present only when the browser sent them
+  posture_alerts?: number
+  hands_alerts?: number
+  eye_contact_alerts?: number
+  eye_contact_pct?: number | null
+  // RUBRIC.md fields the backend does not return yet
+  hedge_count?: number
+  audible_pct?: number
+  duration_sec?: number
+  target_length_sec?: number
 }
 
-export interface SpeechFeedback {
-  scores: {
-    structure: number
-    clarity: number
-    delivery: number
-    persuasion: number
-    confidence: number
-  } // each 0-10
+export interface Scores {
+  structure: number
+  clarity: number
+  delivery: number
+  body_language?: number // not returned by the backend yet
+  persuasion: number
+  confidence: number
+} // whole numbers 0-10
+
+export interface Feedback {
+  scores: Scores
   overall: number // 0-100
   strengths: string[]
   fixes: string[]
-  robot_line: string // short line the robot speaks at the end
+  robot_line: string
+  criteria?: CriterionScore[] // not returned by the backend yet; the detailed section renders only when present
 }
 
-export interface SpeechResponse {
+// What a session stores and GET /sessions/{id} returns under `results`.
+export interface SessionResults {
   transcript: string
-  metrics: SpeechMetrics
-  feedback: SpeechFeedback
+  metrics: Metrics
+  feedback: Feedback
 }
 
-// ---- backend: WebSocket /events, every message is {type, value} ----
+// POST /speech response.
+export interface SpeechResponse extends SessionResults {
+  session_id: string | null // null when the request had no session_id
+  saved: boolean // false: no session_id, or saving failed (the feedback is still returned)
+}
 
-export type BackendState = 'idle' | 'listening' | 'thinking' | 'speaking'
-export type AlertKind = 'posture' | 'hands' | 'eye_contact' | 'too_fast' | 'too_quiet' | 'filler'
+// ---- WebSocket /events: every message is {type, value} ----
 
-export interface StateEvent { type: 'state'; value: BackendState }
-export interface AlertEvent { type: 'alert'; value: AlertKind }
+export type StateValue = 'idle' | 'listening' | 'thinking' | 'speaking'
+export type AlertValue = 'posture' | 'hands' | 'eye_contact' | 'too_fast' | 'too_quiet' | 'filler'
+export type HandValue = 'raise' | 'lower'
+
+export interface StateEvent { type: 'state'; value: StateValue }
+export interface AlertEvent { type: 'alert'; value: AlertValue }
 export interface LcdEvent { type: 'lcd'; value: string } // max 16 chars, robot only
-export interface FeedbackEvent { type: 'feedback'; value: SpeechFeedback }
-export interface MetricsEvent { type: 'metrics'; value: SpeechMetrics }
-export interface HandEvent { type: 'hand'; value: 'raise' | 'lower' }
+export interface FeedbackEvent { type: 'feedback'; value: Feedback }
+export interface MetricsEvent { type: 'metrics'; value: Metrics }
+export interface HandEvent { type: 'hand'; value: HandValue }
 export interface UserPresentEvent { type: 'user_present'; value: null }
 
-export type LiveEvent =
+export type EventsMessage =
   | StateEvent
   | AlertEvent
   | LcdEvent
@@ -115,37 +148,3 @@ export type LiveEvent =
   | MetricsEvent
   | HandEvent
   | UserPresentEvent
-
-// Setup payloads (frontend forms; the backend only accepts `topic` so far, see API_CONTRACT.md)
-export interface PublicSpeakingSetup {
-  topic: string
-  targetMinutes: number
-  script?: string
-}
-
-export interface DebateSetup {
-  motion: string
-  side: 'for' | 'against'
-  difficulty: 'easy' | 'medium' | 'hard'
-}
-
-export interface InterviewSetup {
-  jobDescription: string
-  company?: string
-  role?: string
-  questionTypes: string[]
-  questionCount: number
-  feedbackTiming: 'each' | 'end'
-}
-
-// ---- backend: /sessions ----
-
-export interface SessionCreate {
-  speaker: string
-  mode: string // free string on the backend; the frontend sends a ModeId
-  topic: string
-}
-
-export interface Session extends SessionCreate {
-  session_id: string // UUID4
-}
