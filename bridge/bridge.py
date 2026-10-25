@@ -211,6 +211,7 @@ class SerialLink:
                 self.conn, self.last_error = conn, ""
                 print(f"serial: connected to {name} at {BAUD} baud")
                 for line in self.last.values():  # catch the rebooted robot up
+                    print(f"  -> arduino  {line}  (catch-up)")
                     self._write(line)
             await asyncio.sleep(0.5)
 
@@ -220,6 +221,7 @@ class SerialLink:
         if self.conn is None:
             print(f"serial: not connected, skipped {line}")
             return
+        print(f"  -> arduino  {line}")  # same as --dry-run, so you can see events arriving
         self._write(line)
 
     def _write(self, line: str) -> None:
