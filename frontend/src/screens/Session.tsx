@@ -13,6 +13,7 @@ import { useLiveEvents } from '@/hooks/useLiveEvents'
 import { useRecorder, type RecorderState } from '@/hooks/useRecorder'
 import { useSpeaker } from '@/hooks/useSpeaker'
 import { useVision, type VisionState } from '@/hooks/useVision'
+import type { CalibrationBlocker } from '@/vision'
 import { MODES } from '@/modes'
 import type { Mood, ModeId, VisionStats } from '@/types'
 
@@ -42,9 +43,17 @@ const MIC_HELP: Partial<Record<RecorderState, { title: string; body: string }>> 
   },
 }
 
+// Shown while calibrating, for whatever is stopping it.
+const BLOCKER_HINT: Record<CalibrationBlocker, string> = {
+  torso: 'Step back until your hips are in the picture.',
+  neck: 'Make sure both shoulders and both ears are in view.',
+  face: 'Face the camera so I can see your face.',
+  frame_gap: 'The camera is lagging. Close other apps or browser tabs.',
+  unstable: 'Hold still for a moment.',
+}
+
 const VISION_STATUS: Partial<Record<VisionState, string>> = {
   loading: 'Starting the camera...',
-  calibrating: 'Stand naturally and face the camera for a few seconds.',
   watching: 'Watching your posture and eye contact.',
   unavailable: 'The camera is off, so no posture tips this time. I am still listening.',
 }
@@ -77,6 +86,7 @@ export default function Session({ mode }: { mode: ModeId }) {
   const { toasts, send, dismissToast } = useLiveEvents()
   const {
     state: visionState,
+    calibration,
     videoRef,
     record: visionRecord,
     pause: visionPause,
@@ -247,10 +257,18 @@ export default function Session({ mode }: { mode: ModeId }) {
                     : 'sr-only'
                 }
               />
-              {VISION_STATUS[visionState] && (
+              {visionState === 'calibrating' ? (
                 <p role="status" className="text-sm text-muted-foreground">
-                  {VISION_STATUS[visionState]}
+                  {calibration.blocker
+                    ? BLOCKER_HINT[calibration.blocker]
+                    : `Stand naturally and face the camera... ${calibration.percent}%`}
                 </p>
+              ) : (
+                VISION_STATUS[visionState] && (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    {VISION_STATUS[visionState]}
+                  </p>
+                )
               )}
             </div>
 

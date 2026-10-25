@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { initializeVision } from '@/vision'
-import type { AlertValue, AnalysisStatus, VisionController } from '@/vision'
+import type { AlertValue, AnalysisStatus, CalibrationBlocker, VisionController } from '@/vision'
 import type { VisionStats } from '@/types'
 
 // Same version as the npm package. Loaded from Google's CDN so no model files
@@ -36,6 +36,15 @@ function loadVision() {
 
 export type VisionState = 'off' | 'loading' | 'calibrating' | 'watching' | 'unavailable'
 
+// Why calibration is not progressing, most actionable first. Any blocker on a
+// frame restarts the ~3 s calibration timer.
+const BLOCKER_ORDER: CalibrationBlocker[] = ['frame_gap', 'torso', 'neck', 'face', 'unstable']
+
+export interface Calibration {
+  blocker: CalibrationBlocker | null
+  percent: number // 0-100, in steps of 20 so React re-renders rarely
+}
+
 interface Tally {
   posture: number
   hands: number
@@ -51,6 +60,8 @@ const emptyTally = (): Tally => ({ posture: 0, hands: 0, eye_contact: 0, faceFra
 // carries on without vision stats. Only time spent recording (not paused) is counted.
 export function useVision(onAlert: (value: AlertValue) => void) {
   const [state, setState] = useState<VisionState>('off')
+  const [calibration, setCalibration] = useState<Calibration>({ blocker: null, percent: 0 })
+  const lastCalibration = useRef('')
   const videoRef = useRef<HTMLVideoElement>(null)
   const stream = useRef<MediaStream | null>(null)
   const controller = useRef<VisionController | null>(null)
@@ -75,6 +86,8 @@ export function useVision(onAlert: (value: AlertValue) => void) {
     active.current = true
     calibrated.current = false
     tally.current = emptyTally()
+    lastCalibration.current = ''
+    setCalibration({ blocker: null, percent: 0 })
     setState('loading')
 
     handlers.alert = (value) => {
@@ -83,7 +96,19 @@ export function useVision(onAlert: (value: AlertValue) => void) {
       onAlertRef.current(value)
     }
     handlers.status = (status) => {
-      if (!status.calibrated) return
+      if (!status.calibrated) {
+        const blocker = BLOCKER_ORDER.find((b) => status.calibrationBlockers.includes(b)) ?? null
+        const percent = Math.floor(status.calibrationProgress * 5) * 20
+        const key = `${blocker}:${percent}`
+        if (key !== lastCalibration.current) {
+          if (!lastCalibration.current.startsWith(`${blocker}:`)) {
+            console.info('Vision calibration:', blocker ? `waiting on ${status.calibrationBlockers.join(', ')}` : 'progressing')
+          }
+          lastCalibration.current = key
+          setCalibration({ blocker, percent })
+        }
+        return
+      }
       if (!calibrated.current) {
         calibrated.current = true
         setState('watching')
@@ -154,5 +179,5 @@ export function useVision(onAlert: (value: AlertValue) => void) {
     [release],
   )
 
-  return { state, videoRef, record, pause, stop }
+  return { state, calibration, videoRef, record, pause, stop }
 }
