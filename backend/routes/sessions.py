@@ -1,14 +1,15 @@
-"""Session endpoints backed by temporary in-memory storage."""
+"""Session endpoints, backed by Postgres when DATABASE_URL is set, else in memory."""
 
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from backend.database import create_store
 from backend.models.sessions import Session, SessionCreate
 from backend.stores.sessions import SessionStore
 
 router = APIRouter(tags=["sessions"])
-_store = SessionStore()
+_store = create_store()
 
 
 def get_session_store() -> SessionStore:
