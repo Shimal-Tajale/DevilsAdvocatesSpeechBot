@@ -2,12 +2,16 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
+import logging
+
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.events import clients, broadcast
-from backend.pipeline import run_session
+from backend.pipeline import NoSpeechError, run_session
 from backend.routes import sessions
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Devil's Advocates Speech Bot")
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
@@ -20,14 +24,28 @@ async def events_ws(ws: WebSocket):
     clients.add(ws)
     try:
         while True:
-            event = await ws.receive_json()
+            try:
+                event = await ws.receive_json()
+            except ValueError:  # not JSON: skip it, keep the client connected
+                continue
             await broadcast(event)
     except WebSocketDisconnect:
+        pass
+    finally:
         clients.discard(ws)
 
 @app.post("/speech")
 async def speech(audio: UploadFile = File(...)):
-    return await run_session(await audio.read())
+    data = await audio.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+    try:
+        return await run_session(data)
+    except NoSpeechError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.exception("Speech pipeline failed")
+        raise HTTPException(status_code=502, detail=f"Speech analysis failed: {e}")
 
 @app.post("/test/{type}/{value}")
 async def test_event(type: str, value: str):
