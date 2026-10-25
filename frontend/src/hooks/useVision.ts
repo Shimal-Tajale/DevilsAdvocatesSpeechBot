@@ -74,9 +74,24 @@ function detailFor(value: AlertValue, b: Behaviors | undefined): AlertDetail | u
   return undefined
 }
 
-// Camera + posture analysis alongside a recording. Best effort: if the camera is
-// blocked or the models cannot load, state becomes 'unavailable' and the recording
-// carries on without vision stats. Only time spent recording (not paused) is counted.
+// A downloadable video of the session (camera + mic), for replaying the demo later.
+export interface Clip {
+  url: string
+  name: string
+}
+
+// Preferred first; Safari only records mp4.
+const CLIP_TYPES = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
+
+function clipName(mime: string) {
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
+  return `speech-${stamp}.${mime.includes('mp4') ? 'mp4' : 'webm'}`
+}
+
+// Camera + posture analysis alongside a recording, or on a replayed video file. Best
+// effort: if the camera is blocked or the models cannot load, state becomes 'unavailable'
+// and the recording carries on without vision stats. Only time spent recording (not
+// paused) is counted. Camera sessions also record a clip that can be downloaded.
 export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => void) {
   const [state, setState] = useState<VisionState>('off')
   const [calibration, setCalibration] = useState<Calibration>({ blocker: null, percent: 0 })
@@ -94,6 +109,10 @@ export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => 
   const calibrated = useRef(false)
   const tally = useRef<Tally>(emptyTally())
   const behaviors = useRef<Behaviors | undefined>(undefined)
+  const [mode, setMode] = useState<'camera' | 'replay' | null>(null)
+  const [clip, setClip] = useState<Clip | null>(null)
+  const clipRecorder = useRef<MediaRecorder | null>(null)
+  const finishReplay = useRef<((stats: VisionStats | undefined) => void) | null>(null)
   const onAlertRef = useRef(onAlert)
   useEffect(() => {
     onAlertRef.current = onAlert
@@ -106,10 +125,18 @@ export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => 
     controller.current = null
     stream.current?.getTracks().forEach((track) => track.stop())
     stream.current = null
-    if (videoRef.current) videoRef.current.srcObject = null
+    const video = videoRef.current
+    if (video) {
+      video.pause()
+      video.srcObject = null
+      video.removeAttribute('src') // a replayed file
+      video.muted = true
+    }
   }, [])
 
-  const begin = useCallback(async () => {
+  // Reset everything for a new camera session or replay, and point the module's
+  // callbacks at this hook.
+  const prepare = useCallback(() => {
     active.current = true
     calibrated.current = false
     tally.current = emptyTally()
@@ -167,10 +194,37 @@ export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => 
       tally.current.faceFrames += 1
       if (status.conditions.eye_contact) tally.current.awayFrames += 1
     }
+  }, [])
 
+  // Records camera + mic into one file while the speaker is recording (pauses skipped).
+  const startClip = useCallback((media: MediaStream) => {
+    if (typeof MediaRecorder === 'undefined' || media.getAudioTracks().length === 0) return
+    const mime = CLIP_TYPES.find((type) => MediaRecorder.isTypeSupported(type))
+    const chunks: Blob[] = []
+    const rec = new MediaRecorder(media, mime ? { mimeType: mime } : undefined)
+    rec.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data)
+    }
+    rec.onstop = () => {
+      if (chunks.length === 0) return
+      const type = rec.mimeType || mime || 'video/webm'
+      setClip({ url: URL.createObjectURL(new Blob(chunks, { type })), name: clipName(type) })
+    }
+    rec.start(1000)
+    if (!counting.current) rec.pause()
+    clipRecorder.current = rec
+  }, [])
+
+  const begin = useCallback(async () => {
+    prepare()
+    setMode('camera')
+    setClip(null)
     try {
       const [media, vision] = await Promise.all([
-        navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false }),
+        // The mic is only for the downloadable clip; vision uses the picture.
+        navigator.mediaDevices
+          .getUserMedia({ video: { width: 640, height: 480 }, audio: true })
+          .catch(() => navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false })),
         loadVision(),
       ])
       if (!active.current || !videoRef.current) {
@@ -182,55 +236,109 @@ export function useVision(onAlert: (value: AlertValue, detail?: AlertDetail) => 
       await videoRef.current.play()
       vision.start(videoRef.current)
       controller.current = vision
+      startClip(media)
       setState((current) => (current === 'loading' ? 'calibrating' : current))
     } catch (error) {
       console.warn('Camera analysis unavailable; recording continues without it', error)
       release()
       if (active.current) setState('unavailable')
     }
-  }, [release])
+  }, [prepare, release, startClip])
 
   // Start, or resume after a pause.
   const record = useCallback(() => {
     counting.current = true
     if (!active.current) void begin()
+    else if (clipRecorder.current?.state === 'paused') clipRecorder.current.resume()
   }, [begin])
 
   const pause = useCallback(() => {
     counting.current = false
+    if (clipRecorder.current?.state === 'recording') clipRecorder.current.pause()
   }, [])
 
-  // Ends the session. Returns undefined when vision never calibrated, so the backend
-  // gets no stats rather than zeros that would read as a perfect posture score.
+  // Ends the session or replay. Returns undefined when vision never calibrated, so the
+  // backend gets no stats rather than zeros that would read as a perfect posture score.
   const stop = useCallback((): VisionStats | undefined => {
     const wasCalibrated = calibrated.current
     active.current = false
     counting.current = false
+    if (clipRecorder.current && clipRecorder.current.state !== 'inactive') clipRecorder.current.stop()
+    clipRecorder.current = null
     release()
     setState('off')
-    if (!wasCalibrated) return undefined
+    setMode(null)
     const t = tally.current
-    return {
-      posture_alerts: t.posture,
-      hands_alerts: t.hands,
-      eye_contact_alerts: t.eye_contact,
-      eye_contact_pct: t.faceFrames ? Math.round(100 * (1 - t.awayFrames / t.faceFrames)) : null,
-      slouch_alerts: t.slouch,
-      sway_alerts: t.sway,
-      pocket_alerts: t.pockets,
-      fidget_alerts: t.fidget,
-    }
+    const stats: VisionStats | undefined = wasCalibrated
+      ? {
+          posture_alerts: t.posture,
+          hands_alerts: t.hands,
+          eye_contact_alerts: t.eye_contact,
+          eye_contact_pct: t.faceFrames ? Math.round(100 * (1 - t.awayFrames / t.faceFrames)) : null,
+          slouch_alerts: t.slouch,
+          sway_alerts: t.sway,
+          pocket_alerts: t.pockets,
+          fidget_alerts: t.fidget,
+        }
+      : undefined
+    finishReplay.current?.(stats)
+    finishReplay.current = null
+    return stats
   }, [release])
+
+  // Replay mode: run the same analysis on a recorded video, played with sound, so alerts
+  // (toasts, mascot, robot) fire in sync with it. Resolves with the stats when the video
+  // ends or stop() is called.
+  const replay = useCallback(
+    (url: string) =>
+      new Promise<VisionStats | undefined>((resolve) => {
+        const video = videoRef.current
+        if (!video) return resolve(undefined)
+        prepare()
+        setMode('replay')
+        counting.current = true
+        finishReplay.current = resolve
+        void (async () => {
+          try {
+            const vision = await loadVision()
+            if (!active.current) return
+            video.srcObject = null
+            video.src = url
+            video.muted = false
+            video.addEventListener('ended', () => stop(), { once: true })
+            vision.start(video)
+            controller.current = vision
+            setState((current) => (current === 'loading' ? 'calibrating' : current))
+            await video.play()
+          } catch (error) {
+            console.warn('Replay analysis unavailable', error)
+            stop()
+            setState('unavailable')
+          }
+        })()
+      }),
+    [prepare, stop],
+  )
+
+  // A new clip replaces the old one; the old download link is no longer needed.
+  const clipUrl = clip?.url
+  useEffect(() => () => {
+    if (clipUrl) URL.revokeObjectURL(clipUrl)
+  }, [clipUrl])
 
   // Leaving the screen mid-session must free the camera.
   useEffect(
     () => () => {
       active.current = false
       counting.current = false
+      if (clipRecorder.current && clipRecorder.current.state !== 'inactive') {
+        clipRecorder.current.onstop = null
+        clipRecorder.current.stop()
+      }
       release()
     },
     [release],
   )
 
-  return { state, calibration, videoRef, canvasRef, status, lastAlert, record, pause, stop }
+  return { state, mode, clip, calibration, videoRef, canvasRef, status, lastAlert, record, pause, stop, replay }
 }
