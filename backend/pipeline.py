@@ -183,23 +183,30 @@ def _gemini_client() -> genai.Client:
     return _gemini
 
 
-# Tried in order. Popular models return 503 "high demand" at busy times,
-# so fall through to the next one instead of failing the demo.
-GEMINI_MODELS = "gemini-3.5-flash-lite,gemini-3.8-flash,gemini-2.5-flash"
+# Tried in order. Popular models return 503 "high demand" at busy times, or just
+# hang, so fall through to the next one instead of failing the demo. Retired
+# models return 404, which also falls through.
+GEMINI_MODELS = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash"
+GEMINI_TIMEOUT_SEC = 30  # per model; a hung model would otherwise stall the request forever
 
 
 async def call_gemini(prompt: str, schema: type[BaseModel] = Feedback) -> str:
     models = os.getenv("GEMINI_MODELS", GEMINI_MODELS).split(",")
+    timeout = float(os.getenv("GEMINI_TIMEOUT_SEC") or GEMINI_TIMEOUT_SEC)
     for model in models:
         try:
-            response = await _gemini_client().aio.models.generate_content(
+            response = await asyncio.wait_for(_gemini_client().aio.models.generate_content(
                 model=model.strip(),
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    response_mime_type="application/json", response_schema=schema))
+                    response_mime_type="application/json", response_schema=schema)), timeout)
             return response.text
+        except TimeoutError:
+            logger.warning("Gemini %s took over %.0f s, trying the next model", model, timeout)
+            if model == models[-1]:
+                raise
         except errors.APIError as e:
-            if e.code not in (429, 500, 503) or model == models[-1]:
+            if e.code not in (404, 429, 500, 503) or model == models[-1]:
                 raise
 
 

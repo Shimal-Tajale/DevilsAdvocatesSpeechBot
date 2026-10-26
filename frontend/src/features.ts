@@ -9,7 +9,7 @@ export const features = {
   scriptUpload: true,
   noteCards: true,
   cameraPreview: true,
-  history: false,
+  history: true,
   // true: api.ts returns mock data. false: api.ts calls the real backend through the Vite proxy.
   useMocks: false,
 }

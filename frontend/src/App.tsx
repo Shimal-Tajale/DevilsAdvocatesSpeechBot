@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { features } from './features'
 import { MODES } from './modes'
+import History from './screens/History'
 import Home from './screens/Home'
 import Results from './screens/Results'
 import Session from './screens/Session'
@@ -22,7 +23,7 @@ export default function App() {
         {MODES.filter((m) => features.modes[m.id]).map((m) => (
           <Route key={m.id} path={m.path} element={<Session mode={m.id} />} />
         ))}
-        {features.history && <Route path="/history" element={<Placeholder title="History" />} />}
+        {features.history && <Route path="/history" element={<History />} />}
         <Route path="/results" element={<Results />} />
         <Route path="/results/:session_id" element={<Results />} />
         <Route path="*" element={<Placeholder title="Not found" />} />
