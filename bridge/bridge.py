@@ -319,7 +319,7 @@ async def main(dry_run: bool) -> None:
     # connection drops (e.g. someone restarts the server) it waits a moment
     # and connects again by itself. So the bridge can be left running all demo.
     async for ws in connect(url):
-        print(f"server: connected to {url}")
+        print(f"server: connected to {url.split('@')[-1]}")  # hide any access code
 
         # Start both jobs side by side.
         tasks = [asyncio.create_task(server_to_robot(ws, port)),

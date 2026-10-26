@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from backend.events import clients, broadcast
 from backend.pipeline import NoSpeechError, VisionStats, ask_question, rate_answer, run_session
 from backend.routes import sessions
+from backend import web
 
 logger = logging.getLogger(__name__)
 
@@ -106,3 +107,6 @@ async def test_event(type: str, value: str):
     event = {"type": type, "value": value}
     await broadcast(event)
     return {"sent": event, "clients": len(clients)}
+# Hosting (Render): serve the built frontend, /api and /ws prefixes, optional access code.
+# Must stay last, after every API route.
+web.install(app)
