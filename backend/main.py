@@ -4,6 +4,7 @@ load_dotenv()
 
 import asyncio
 import logging
+import os
 from uuid import UUID
 
 from fastapi import (FastAPI, File, Form, HTTPException, UploadFile, WebSocket,
@@ -102,11 +103,14 @@ async def answer(session_id: UUID, audio: UploadFile = File(...),
         logger.exception("Answer rating failed")
         raise HTTPException(status_code=502, detail=f"Could not rate the answer: {e}")
 
-@app.post("/test/{type}/{value}")
-async def test_event(type: str, value: str):
-    event = {"type": type, "value": value}
-    await broadcast(event)
-    return {"sent": event, "clients": len(clients)}
+# Manual event sender for debugging the robot/frontend. Off unless ENABLE_TEST_EVENTS=1,
+# so a public deploy can't drive the robot.
+if os.getenv("ENABLE_TEST_EVENTS") == "1":
+    @app.post("/test/{type}/{value}")
+    async def test_event(type: str, value: str):
+        event = {"type": type, "value": value}
+        await broadcast(event)
+        return {"sent": event, "clients": len(clients)}
 # Hosting (Render): serve the built frontend, /api and /ws prefixes, optional access code.
 # Must stay last, after every API route.
 web.install(app)
